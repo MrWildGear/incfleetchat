@@ -7,8 +7,9 @@ use crate::types::SiteCandidate;
 fn message_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
+        // Optional U+FEFF: live EVE logs often have a BOM on every message line.
         Regex::new(
-            r"(?m)^\[ (\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}) \] (.+?) > (.*)$",
+            r"(?m)^\u{feff}?\[ (\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2}) \] (.+?) > (.*)$",
         )
         .expect("message regex")
     })
@@ -121,5 +122,17 @@ mod tests {
         let sites = parse_site_candidates(text);
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].tag, "a");
+    }
+
+    #[test]
+    fn parses_messages_with_per_line_bom() {
+        // Live EVE UTF-16 logs often decode with U+FEFF before each message line.
+        let text = "\u{feff}[ 2026.08.02 18:33:11 ] Hamilton Norris > 1\n\
+\u{feff}[ 2026.08.02 18:34:13 ] Hamilton Norris > 1\n";
+        let sites = parse_site_candidates(text);
+        assert_eq!(sites.len(), 2);
+        assert_eq!(sites[0].tag, "1");
+        assert_eq!(sites[1].tag, "1");
+        assert_eq!(sites[0].speaker, "Hamilton Norris");
     }
 }

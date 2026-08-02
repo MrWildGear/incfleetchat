@@ -36,9 +36,18 @@ fn is_fleet_log(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Session stamp from `Fleet_YYYYMMDD_HHMMSS_*.txt` (lexicographic = chronological).
+fn fleet_session_stamp(path: &Path) -> String {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 /// Pick the newest Fleet_*.txt whose Listener matches `character`.
+/// Prefer filename session stamp over mtime — EVE often touches many logs at once.
 pub fn resolve_active_fleet_log(dir: &Path, character: &str) -> std::io::Result<Option<PathBuf>> {
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    let mut best: Option<(String, PathBuf)> = None;
     if !dir.is_dir() {
         return Ok(None);
     }
@@ -57,13 +66,10 @@ pub fn resolve_active_fleet_log(dir: &Path, character: &str) -> std::io::Result<
         if !listener.eq_ignore_ascii_case(character) {
             continue;
         }
-        let modified = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let stamp = fleet_session_stamp(&path);
         match &best {
-            None => best = Some((modified, path)),
-            Some((t, _)) if modified >= *t => best = Some((modified, path)),
+            None => best = Some((stamp, path)),
+            Some((s, _)) if stamp >= *s => best = Some((stamp, path)),
             _ => {}
         }
     }
@@ -82,8 +88,6 @@ pub fn fleet_log_id(path: &Path) -> String {
 mod tests {
     use super::*;
     use std::fs;
-    use std::thread;
-    use std::time::Duration;
     use tempfile::tempdir;
 
     fn write_fleet(dir: &Path, name: &str, listener: &str) {
@@ -101,7 +105,6 @@ mod tests {
     fn resolves_listener_newest_among_many() {
         let dir = tempdir().unwrap();
         write_fleet(dir.path(), "Fleet_20260801_100000_1.txt", "Alpha Pilot");
-        thread::sleep(Duration::from_millis(20));
         write_fleet(dir.path(), "Fleet_20260801_110000_1.txt", "Alpha Pilot");
         write_fleet(dir.path(), "Fleet_20260801_110000_2.txt", "Other Pilot");
 
@@ -135,5 +138,27 @@ mod tests {
                 "Other Pilot".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn live_hamilton_log_parses_two_ones_when_present() {
+        let p = std::path::Path::new(
+            r"c:\Users\MrWildGear\Documents\EVE\logs\Chatlogs\Fleet_20260802_183116_90645543.txt",
+        );
+        if !p.exists() {
+            return;
+        }
+        let text = match crate::encoding::read_chatlog(p) {
+            Ok(t) => t,
+            Err(_) => return, // skip if EVE holds an exclusive lock in this environment
+        };
+        let sites = crate::parse::parse_site_candidates(&text);
+        assert!(
+            sites.len() >= 2,
+            "expected stacked tag 1s from live log, got {} (listener={:?})",
+            sites.len(),
+            crate::parse::parse_listener(&text)
+        );
+        assert!(sites.iter().all(|s| s.tag == "1"));
     }
 }
