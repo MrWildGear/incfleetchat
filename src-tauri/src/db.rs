@@ -4,6 +4,9 @@ use sqlx::{Pool, Sqlite};
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::analytics_types::{Catalog, RunSummary, SpawnSummary};
+use crate::spawn_parse::SpawnDraft;
+use crate::timing::{AnalyticsReport, RunSettings};
 use crate::types::AppSettings;
 
 #[derive(Clone)]
@@ -45,6 +48,31 @@ impl Db {
                 site_id TEXT PRIMARY KEY,
                 cleared_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS spawns (
+                constellation TEXT PRIMARY KEY,
+                region TEXT,
+                security_status TEXT,
+                sov_holder TEXT,
+                staging_system TEXT,
+                hq_system TEXT,
+                assault_systems TEXT NOT NULL DEFAULT '[]',
+                vanguard_systems TEXT NOT NULL DEFAULT '[]',
+                announced_at TEXT,
+                title TEXT,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS analytics_runs (
+                run_id TEXT PRIMARY KEY,
+                constellation TEXT NOT NULL,
+                saved_at TEXT NOT NULL,
+                settings_json TEXT NOT NULL,
+                wallet_text TEXT NOT NULL,
+                manifest_text TEXT NOT NULL,
+                report_json TEXT NOT NULL,
+                site_count INTEGER NOT NULL,
+                liquid_isk INTEGER NOT NULL,
+                FOREIGN KEY (constellation) REFERENCES spawns(constellation)
+            );
             "#,
         )
         .execute(&self.pool)
@@ -56,6 +84,176 @@ impl Db {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn upsert_spawn(
+        &self,
+        constellation: &str,
+        draft: Option<&SpawnDraft>,
+    ) -> Result<(), sqlx::Error> {
+        let now = Utc::now().to_rfc3339();
+        let region = draft.and_then(|d| d.region.clone());
+        let security_status = draft.and_then(|d| d.security_status.clone());
+        let sov_holder = draft.and_then(|d| d.sov_holder.clone());
+        let staging_system = draft.and_then(|d| d.staging_system.clone());
+        let hq_system = draft.and_then(|d| d.hq_system.clone());
+        let assault = serde_json::to_string(
+            &draft.map(|d| d.assault_systems.clone()).unwrap_or_default(),
+        )
+        .unwrap_or_else(|_| "[]".into());
+        let vanguard = serde_json::to_string(
+            &draft.map(|d| d.vanguard_systems.clone()).unwrap_or_default(),
+        )
+        .unwrap_or_else(|_| "[]".into());
+        let announced_at = draft.and_then(|d| d.announced_at.map(|t| t.to_rfc3339()));
+        let title = draft.and_then(|d| d.title.clone());
+
+        sqlx::query(
+            r#"
+            INSERT INTO spawns (
+                constellation, region, security_status, sov_holder, staging_system, hq_system,
+                assault_systems, vanguard_systems, announced_at, title, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(constellation) DO UPDATE SET
+                region = excluded.region,
+                security_status = excluded.security_status,
+                sov_holder = excluded.sov_holder,
+                staging_system = excluded.staging_system,
+                hq_system = excluded.hq_system,
+                assault_systems = excluded.assault_systems,
+                vanguard_systems = excluded.vanguard_systems,
+                announced_at = excluded.announced_at,
+                title = excluded.title,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(constellation)
+        .bind(region)
+        .bind(security_status)
+        .bind(sov_holder)
+        .bind(staging_system)
+        .bind(hq_system)
+        .bind(assault)
+        .bind(vanguard)
+        .bind(announced_at)
+        .bind(title)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn save_run(
+        &self,
+        run_id: &str,
+        constellation: &str,
+        settings: &RunSettings,
+        wallet_text: &str,
+        manifest_text: &str,
+        report: &AnalyticsReport,
+    ) -> Result<(), sqlx::Error> {
+        let settings_json = serde_json::to_string(settings).unwrap_or_else(|_| "{}".into());
+        let report_json = serde_json::to_string(report).unwrap_or_else(|_| "{}".into());
+        sqlx::query(
+            r#"
+            INSERT INTO analytics_runs (
+                run_id, constellation, saved_at, settings_json, wallet_text, manifest_text,
+                report_json, site_count, liquid_isk
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(run_id)
+        .bind(constellation)
+        .bind(Utc::now().to_rfc3339())
+        .bind(settings_json)
+        .bind(wallet_text)
+        .bind(manifest_text)
+        .bind(report_json)
+        .bind(report.session.sites_ran as i64)
+        .bind(report.session.liquid_isk)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn load_catalog(&self) -> Result<Catalog, sqlx::Error> {
+        let spawn_rows: Vec<(String, Option<String>, Option<String>, Option<String>)> =
+            sqlx::query_as(
+                "SELECT constellation, region, staging_system, hq_system FROM spawns ORDER BY constellation",
+            )
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut spawns = Vec::new();
+        for (constellation, region, staging_system, hq_system) in spawn_rows {
+            let (run_count,): (i64,) =
+                sqlx::query_as("SELECT COUNT(*) FROM analytics_runs WHERE constellation = ?")
+                    .bind(&constellation)
+                    .fetch_one(&self.pool)
+                    .await?;
+            spawns.push(SpawnSummary {
+                constellation,
+                region,
+                staging_system,
+                hq_system,
+                run_count: run_count as u32,
+            });
+        }
+
+        let run_rows: Vec<(String, String, String, i64, i64)> = sqlx::query_as(
+            "SELECT run_id, constellation, saved_at, site_count, liquid_isk FROM analytics_runs ORDER BY saved_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut runs = Vec::new();
+        for (run_id, constellation, saved_at, site_count, liquid_isk) in run_rows {
+            let saved = DateTime::parse_from_rfc3339(&saved_at)
+                .map(|d| d.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+            runs.push(RunSummary {
+                run_id,
+                constellation,
+                saved_at: saved,
+                site_count: site_count as u32,
+                liquid_isk,
+            });
+        }
+
+        Ok(Catalog { spawns, runs })
+    }
+
+    pub async fn load_report(&self, run_id: &str) -> Result<Option<AnalyticsReport>, sqlx::Error> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT report_json FROM analytics_runs WHERE run_id = ?")
+                .bind(run_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.and_then(|(json,)| serde_json::from_str(&json).ok()))
+    }
+
+    pub async fn load_reports_for_spawn(
+        &self,
+        constellation: &str,
+    ) -> Result<Vec<AnalyticsReport>, sqlx::Error> {
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT report_json FROM analytics_runs WHERE constellation = ?")
+                .bind(constellation)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(json,)| serde_json::from_str(&json).ok())
+            .collect())
+    }
+
+    pub async fn load_all_reports(&self) -> Result<Vec<AnalyticsReport>, sqlx::Error> {
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT report_json FROM analytics_runs").fetch_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(json,)| serde_json::from_str(&json).ok())
+            .collect())
     }
 
     pub async fn get_settings(&self) -> Result<AppSettings, sqlx::Error> {

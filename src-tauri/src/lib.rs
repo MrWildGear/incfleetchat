@@ -1,12 +1,18 @@
+mod analytics_types;
 mod board;
 mod commands;
 mod db;
 mod encoding;
 mod parse;
 mod resolve;
+mod run_desk;
 mod site_id;
+mod spawn_parse;
 mod state;
+mod timing;
 mod types;
+mod vanguard_payouts;
+mod wallet_parse;
 mod watch;
 
 pub use board::*;

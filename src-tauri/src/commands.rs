@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
+use crate::analytics_types::{AmendOp, EditionFocus, ReportScope, Tray};
 use crate::db::Db;
+use crate::run_desk::RunDesk;
 use crate::state::{default_chatlogs_dir, AppState};
 use crate::types::{AppSettings, Board};
 use crate::watch;
@@ -105,6 +107,64 @@ async fn refresh_board(app: AppHandle, state: State<'_, Arc<AppState>>) -> Resul
     Ok(board)
 }
 
+#[tauri::command]
+async fn open_tools_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("tools") {
+        win.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, "tools", WebviewUrl::App("index.html".into()))
+        .title("IncFleetChat Tools")
+        .inner_size(960.0, 680.0)
+        .resizable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn run_desk_open(desk: State<'_, Arc<RunDesk>>) -> Result<EditionFocus, String> {
+    desk.open().await
+}
+
+#[tauri::command]
+async fn run_desk_paste(
+    desk: State<'_, Arc<RunDesk>>,
+    tray: Tray,
+    text: String,
+) -> Result<EditionFocus, String> {
+    desk.paste(tray, &text).await
+}
+
+#[tauri::command]
+async fn run_desk_analyze(desk: State<'_, Arc<RunDesk>>) -> Result<EditionFocus, String> {
+    desk.analyze().await
+}
+
+#[tauri::command]
+async fn run_desk_focus(
+    desk: State<'_, Arc<RunDesk>>,
+    scope: ReportScope,
+) -> Result<EditionFocus, String> {
+    desk.focus(scope).await
+}
+
+#[tauri::command]
+async fn run_desk_amend(
+    desk: State<'_, Arc<RunDesk>>,
+    op: AmendOp,
+) -> Result<EditionFocus, String> {
+    desk.amend(op).await
+}
+
+#[tauri::command]
+async fn lookup_vanguard_payout(
+    space: crate::vanguard_payouts::SpaceBand,
+    fleet_size: u32,
+) -> Result<crate::vanguard_payouts::PayoutTicket, String> {
+    Ok(crate::vanguard_payouts::lookup_payout(space, fleet_size))
+}
+
 fn data_db_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).ok();
@@ -118,9 +178,11 @@ pub fn run_app() {
         .setup(|app| {
             let handle = app.handle().clone();
             let db_path = data_db_path(&handle)?;
-            let state = tauri::async_runtime::block_on(async {
+            let (state, desk) = tauri::async_runtime::block_on(async {
                 let db = Db::open(&db_path).await.map_err(|e| e.to_string())?;
-                AppState::new(db).await
+                let desk = Arc::new(RunDesk::new(db.clone()));
+                let state = AppState::new(db).await?;
+                Ok::<_, String>((state, desk))
             })?;
 
             let _ = default_chatlogs_dir();
@@ -131,6 +193,7 @@ pub fn run_app() {
 
             watch::start_watcher(handle, state.clone())?;
             app.manage(state);
+            app.manage(desk);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -143,6 +206,13 @@ pub fn run_app() {
             list_characters,
             set_always_on_top,
             refresh_board,
+            open_tools_window,
+            run_desk_open,
+            run_desk_paste,
+            run_desk_analyze,
+            run_desk_focus,
+            run_desk_amend,
+            lookup_vanguard_payout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
