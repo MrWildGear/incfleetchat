@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { Pin, Settings } from "lucide-react";
+import { Pin, Settings, Wrench } from "lucide-react";
 import { useAppStore } from "./store";
 import { SiteRowView, derivePhase } from "./components/SiteRow";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -76,6 +76,14 @@ function App() {
           )}
         >
           <Pin className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          title="Tools"
+          onClick={() => void invoke("open_tools_window")}
+          className="rounded-md border border-border p-1.5 text-muted hover:text-fg"
+        >
+          <Wrench className="h-4 w-4" />
         </button>
         <button
           type="button"
