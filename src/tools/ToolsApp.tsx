@@ -778,7 +778,7 @@ export function ToolsApp() {
                     value={focus.enrichment.resolved_fc ?? "—"}
                   />
                   <Row
-                    label="Warp time"
+                    label="Approach"
                     value={formatDuration(focus.enrichment.totals.approach_seconds)}
                   />
                   <Row
@@ -929,7 +929,7 @@ export function ToolsApp() {
                       <th className="px-2 py-1">Break?</th>
                       <th className="px-2 py-1">ISK</th>
                       <th className="px-2 py-1">LP</th>
-                      <th className="px-2 py-1">Warp</th>
+                      <th className="px-2 py-1">Approach</th>
                       <th className="px-2 py-1">Combat→payout</th>
                       <th className="px-2 py-1">Source</th>
                     </tr>
