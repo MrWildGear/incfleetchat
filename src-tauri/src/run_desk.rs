@@ -190,6 +190,8 @@ impl RunDesk {
         }
         let site_times: Vec<DateTime<Utc>> =
             report.sites.iter().map(|s| s.occurred_at).collect();
+        let site_durations: Vec<Option<i64>> =
+            report.sites.iter().map(|s| s.duration_seconds).collect();
 
         let app_settings = self.db.get_settings().await.map_err(|e| e.to_string())?;
         let gamelogs_dir = app_settings
@@ -225,6 +227,7 @@ impl RunDesk {
         let mut snapshot = enrich_run(
             &scan.logs,
             &site_times,
+            &site_durations,
             settings.break_threshold_minutes,
             settings.run_start,
             missiles_per_cycle,
@@ -992,7 +995,7 @@ Immensea
         assert_eq!(enrichment.resolved_fc.as_deref(), Some("FC Pilot"));
         assert_eq!(enrichment.sites.len(), 2);
         assert_eq!(enrichment.sites[1].source, EnrichmentSource::Fleet);
-        assert_eq!(enrichment.sites[1].approach_seconds, Some(90));
+        assert_eq!(enrichment.sites[1].approach_seconds, Some(180));
         assert_eq!(enrichment.sites[1].combat_to_payout_seconds, Some(180));
 
         // Files the scan had to skip are reported on the snapshot.
