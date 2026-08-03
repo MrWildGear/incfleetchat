@@ -4,6 +4,7 @@ mod commands;
 mod db;
 mod encoding;
 mod gamelog_parse;
+mod gamelog_scan;
 mod parse;
 mod resolve;
 mod run_desk;
