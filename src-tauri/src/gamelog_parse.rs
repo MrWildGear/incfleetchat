@@ -65,6 +65,34 @@ pub fn parse_session_started(text: &str) -> Option<DateTime<Utc>> {
     None
 }
 
+fn markup_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"<[^>]*>").expect("gamelog markup regex"))
+}
+
+/// Combat body with the client's colour/font markup removed.
+fn strip_markup(body: &str) -> String {
+    markup_re().replace_all(body, " ").into_owned()
+}
+
+/// Whether a combat body describes damage *we* dealt.
+///
+/// Assumed EVE client shape once markup is stripped:
+///   outgoing — `312 to Sansha's Nation Frenzy - Heavy Missile - Hits`
+///   incoming — `84 from Sansha's Nation Frenzy - Hits`
+/// The bare `to`/`from` token is the direction. Plain-text `Your ...`
+/// lines (used by fixtures and older clients) also count as outgoing.
+fn is_outgoing_combat(plain: &str) -> bool {
+    for token in plain.split_whitespace() {
+        match token {
+            "to" => return true,
+            "from" => return false,
+            _ => {}
+        }
+    }
+    plain.trim_start().starts_with("Your ")
+}
+
 fn classify_event(channel: &str, body: &str) -> Option<GamelogEventKind> {
     match channel {
         "notify" => {
@@ -79,7 +107,8 @@ fn classify_event(channel: &str, body: &str) -> Option<GamelogEventKind> {
             }
         }
         "combat" => {
-            if body.contains("Hits") {
+            let plain = strip_markup(body);
+            if plain.contains("Hits") && is_outgoing_combat(&plain) {
                 Some(GamelogEventKind::CombatHit)
             } else {
                 Some(GamelogEventKind::CombatAny)
@@ -142,6 +171,8 @@ mod tests {
                 GamelogEventKind::Regrouping,
                 GamelogEventKind::CombatHit,
                 GamelogEventKind::Reload,
+                // Incoming Hits and an incoming miss: neither is our damage.
+                GamelogEventKind::CombatAny,
                 GamelogEventKind::CombatAny,
             ]
         );
@@ -168,6 +199,38 @@ mod tests {
         let events = parse_gamelog_events(SAMPLE);
         assert!(!events.iter().any(|e| e.raw_hint.contains("question")));
         assert!(!events.iter().any(|e| e.raw_hint.contains("Is the site clear")));
-        assert_eq!(events.len(), 5);
+        assert_eq!(events.len(), 6);
+    }
+
+    #[test]
+    fn only_outgoing_hits_count_as_combat_hits() {
+        let events = parse_gamelog_events(SAMPLE);
+        let hits: Vec<&GamelogEvent> = events
+            .iter()
+            .filter(|e| e.kind == GamelogEventKind::CombatHit)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].raw_hint.contains(">to<"));
+
+        let incoming = "[ 2026.08.02 18:26:00 ] (combat) <color=0xffcc0000><b>84</b> \
+<font size=10>from</font> <b>Sansha's Nation Frenzy</b> - Hits\n";
+        let parsed = parse_gamelog_events(incoming);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].kind, GamelogEventKind::CombatAny);
+
+        let outgoing = "[ 2026.08.02 18:26:00 ] (combat) <color=0xff00ffff><b>312</b> \
+<font size=10>to</font> <b>Sansha's Nation Frenzy</b> - Heavy Missile - Hits\n";
+        let parsed = parse_gamelog_events(outgoing);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].kind, GamelogEventKind::CombatHit);
+    }
+
+    #[test]
+    fn plain_text_your_hits_counts_as_outgoing() {
+        let line = "[ 2026.08.02 18:23:15 ] (combat) Your Heavy Missile Hits Sansha Frenzy, \
+doing 312.0 damage.\n";
+        let parsed = parse_gamelog_events(line);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].kind, GamelogEventKind::CombatHit);
     }
 }

@@ -480,7 +480,8 @@ Immensea
 ---------------------------------------------------------------\n\
 \n\
 [ 2026.07.29 23:09:30 ] (notify) Following Fleet Commander in warp\n\
-[ 2026.07.29 23:11:00 ] (combat) Hits Structure for 100 damage\n",
+[ 2026.07.29 23:11:00 ] (combat) <color=0xff00ffff><b>312</b> <font size=10>to</font> \
+<b>Sansha's Nation Frenzy</b> - Scourge Rage Heavy Missile - Hits\n",
         )
         .unwrap();
 

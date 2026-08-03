@@ -7,8 +7,9 @@
 
 [ 2026.08.02 18:21:05 ] (notify) Following Fleet Commander in warp
 [ 2026.08.02 18:22:10 ] (notify) Regrouping to Fleet Commander
-[ 2026.08.02 18:23:15 ] (combat) Your Heavy Missile Hits Sansha Frenzy, doing 312.0 damage.
+[ 2026.08.02 18:23:15 ] (combat) <color=0xff00ffff><b>312</b> <color=0x77ffffff><font size=10>to</font> <b><color=0xffffffff>Sansha's Nation Frenzy</b><font size=10><color=0x77ffffff> - Scourge Rage Heavy Missile - Hits
 [ 2026.08.02 18:24:20 ] (notify) Loading the Scourge Rage Heavy Missile into the Missile Launcher; this will take approximately 35 seconds.
 [ 2026.08.02 18:24:25 ] (notify) You have run out of charges.
 [ 2026.08.02 18:25:30 ] (question) Is the site clear?
-[ 2026.08.02 18:26:35 ] (combat) Sansha Frenzy misses you completely.
+[ 2026.08.02 18:26:00 ] (combat) <color=0xffcc0000><b>84</b> <color=0x77ffffff><font size=10>from</font> <b><color=0xffffffff>Sansha's Nation Frenzy</b><font size=10><color=0x77ffffff> - Hits
+[ 2026.08.02 18:26:35 ] (combat) <color=0xff00ffff><b>0</b> <color=0x77ffffff><font size=10>from</font> <b><color=0xffffffff>Sansha's Nation Frenzy</b><font size=10><color=0x77ffffff> - Misses
