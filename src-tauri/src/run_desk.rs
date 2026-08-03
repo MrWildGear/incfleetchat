@@ -712,6 +712,7 @@ mod tests {
             combat_to_payout_seconds: combat,
             is_break,
             source: EnrichmentSource::Fc,
+            missiles: vec![],
         }
     }
 

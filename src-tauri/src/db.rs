@@ -662,6 +662,7 @@ mod tests {
                 combat_to_payout_seconds: Some(20),
                 is_break: false,
                 source: EnrichmentSource::Fc,
+                missiles: vec![],
             }],
             missiles: vec![MissileStat {
                 listener: "FC Pilot".into(),

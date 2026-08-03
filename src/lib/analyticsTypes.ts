@@ -94,6 +94,7 @@ export type EnrichmentSite = {
   combat_to_payout_seconds: number | null;
   is_break: boolean;
   source: EnrichmentSource;
+  missiles: MissileStat[];
 };
 
 export type MissileStat = {

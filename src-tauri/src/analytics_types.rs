@@ -109,6 +109,7 @@ pub struct EnrichmentSite {
     pub combat_to_payout_seconds: Option<i64>,
     pub is_break: bool,
     pub source: EnrichmentSource,
+    pub missiles: Vec<MissileStat>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,5 +167,29 @@ mod tests {
         }"#;
 
         assert!(serde_json::from_str::<EnrichmentSnapshot>(stale).is_err());
+    }
+
+    #[test]
+    fn site_without_missiles_field_fails_to_deserialize() {
+        let json = r#"{
+            "resolved_fc": null,
+            "listeners": [],
+            "diagnostics": [],
+            "sites": [{
+                "occurred_at": "2026-01-01T00:00:00Z",
+                "approach_seconds": 10,
+                "combat_to_payout_seconds": 20,
+                "is_break": false,
+                "source": "fleet"
+            }],
+            "missiles": [],
+            "totals": {
+                "approach_seconds": 10,
+                "combat_to_payout_seconds": 20,
+                "avg_combat_to_payout_seconds": 20.0,
+                "fleet_dead": 0
+            }
+        }"#;
+        assert!(serde_json::from_str::<EnrichmentSnapshot>(json).is_err());
     }
 }

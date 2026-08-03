@@ -258,6 +258,7 @@ pub fn enrich_run(
             combat_to_payout_seconds,
             is_break,
             source,
+            missiles: vec![],
         });
     }
 
