@@ -24,11 +24,12 @@ fn parse_eve_ts(s: &str) -> Option<chrono::DateTime<Utc>> {
 }
 
 fn parse_isk_amount(s: &str) -> Option<i64> {
+    // EVE localizes thousands separators: en uses ',', de/etc use '.'.
     let cleaned = s
         .trim()
         .trim_end_matches(" ISK")
         .trim_end_matches(" isk")
-        .replace(',', "");
+        .replace([',', '.', ' ', '\u{00a0}'], "");
     cleaned.parse::<i64>().ok()
 }
 
@@ -124,6 +125,17 @@ mod tests {
         let r = parse_wallet_journal(&text, 15_000_000);
         assert_eq!(r.events.len(), 2);
         assert_eq!(r.duplicates_dropped, 1);
+    }
+
+    #[test]
+    fn keeps_matching_payouts_with_dot_thousands_separators() {
+        // EU/localized EVE client paste uses '.' as thousands separator
+        let text = "\
+2026.08.03 13:03\tCorporate Reward Payout\t15.000.000 ISK\t78.750.000 ISK\tCONCORD rewarded Throbbby for services performed.\n";
+        let r = parse_wallet_journal(text, 15_000_000);
+        assert_eq!(r.events.len(), 1);
+        assert_eq!(r.events[0].amount_isk, 15_000_000);
+        assert_eq!(r.ignored_lines, 0);
     }
 
     #[test]
