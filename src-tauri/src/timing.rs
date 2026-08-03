@@ -31,6 +31,7 @@ impl Default for RunSettings {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(from = "SiteDetailCompat")]
 pub struct SiteDetail {
     pub occurred_at: DateTime<Utc>,
     /// Character (wallet) ISK for this payout.
@@ -44,6 +45,39 @@ pub struct SiteDetail {
     pub counts_toward_avg: bool,
 }
 
+/// Reads both current and pre-fleet-scaling `report_json` rows. Reports
+/// saved before `fleet_isk` existed carry only character ISK, so fleet ISK
+/// degrades to it instead of the whole row being dropped.
+#[derive(serde::Deserialize)]
+struct SiteDetailCompat {
+    occurred_at: DateTime<Utc>,
+    amount_isk: i64,
+    #[serde(default)]
+    fleet_isk: Option<i64>,
+    fleet_lp: i64,
+    #[serde(default)]
+    gap_seconds: Option<i64>,
+    #[serde(default)]
+    duration_seconds: Option<i64>,
+    is_break: bool,
+    counts_toward_avg: bool,
+}
+
+impl From<SiteDetailCompat> for SiteDetail {
+    fn from(c: SiteDetailCompat) -> Self {
+        Self {
+            occurred_at: c.occurred_at,
+            amount_isk: c.amount_isk,
+            fleet_isk: c.fleet_isk.unwrap_or(c.amount_isk),
+            fleet_lp: c.fleet_lp,
+            gap_seconds: c.gap_seconds,
+            duration_seconds: c.duration_seconds,
+            is_break: c.is_break,
+            counts_toward_avg: c.counts_toward_avg,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HourlyBucket {
     pub hour_start: DateTime<Utc>,
@@ -55,6 +89,7 @@ pub struct HourlyBucket {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(from = "SessionSummaryCompat")]
 pub struct SessionSummary {
     pub sites_ran: u32,
     pub active_site_seconds: i64,
@@ -70,6 +105,52 @@ pub struct SessionSummary {
     pub liquid_isk_per_hour: f64,
     pub lp_value_per_hour: f64,
     pub net_per_hour: f64,
+}
+
+/// Reads both current and pre-metric-parity `report_json` rows, where
+/// `active_site_seconds` was `time_spent_seconds`, `character_liquid_isk`
+/// was `liquid_isk`, and the fleet/elapsed fields did not exist.
+#[derive(serde::Deserialize)]
+struct SessionSummaryCompat {
+    sites_ran: u32,
+    #[serde(alias = "time_spent_seconds")]
+    active_site_seconds: i64,
+    #[serde(default)]
+    wallet_elapsed_seconds: i64,
+    #[serde(default)]
+    avg_site_seconds: Option<f64>,
+    #[serde(alias = "liquid_isk")]
+    character_liquid_isk: i64,
+    #[serde(default)]
+    fleet_liquid_isk: Option<i64>,
+    net_lp: i64,
+    #[serde(default)]
+    lp_per_character_total: Option<i64>,
+    lp_value: f64,
+    net_value: f64,
+    liquid_isk_per_hour: f64,
+    lp_value_per_hour: f64,
+    net_per_hour: f64,
+}
+
+impl From<SessionSummaryCompat> for SessionSummary {
+    fn from(c: SessionSummaryCompat) -> Self {
+        Self {
+            sites_ran: c.sites_ran,
+            active_site_seconds: c.active_site_seconds,
+            wallet_elapsed_seconds: c.wallet_elapsed_seconds,
+            avg_site_seconds: c.avg_site_seconds,
+            character_liquid_isk: c.character_liquid_isk,
+            fleet_liquid_isk: c.fleet_liquid_isk.unwrap_or(c.character_liquid_isk),
+            net_lp: c.net_lp,
+            lp_per_character_total: c.lp_per_character_total,
+            lp_value: c.lp_value,
+            net_value: c.net_value,
+            liquid_isk_per_hour: c.liquid_isk_per_hour,
+            lp_value_per_hour: c.lp_value_per_hour,
+            net_per_hour: c.net_per_hour,
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -322,6 +403,46 @@ mod tests {
         assert!(report.sites[1].counts_toward_avg);
         assert_eq!(report.session.active_site_seconds, 5 * 60);
         assert_eq!(report.session.wallet_elapsed_seconds, 5 * 60);
+    }
+
+    #[test]
+    fn legacy_report_json_still_deserializes() {
+        let legacy = r#"{
+            "session": {
+                "sites_ran": 2,
+                "time_spent_seconds": 720,
+                "avg_site_seconds": 360.0,
+                "liquid_isk": 30000000,
+                "net_lp": 60000,
+                "lp_value": 84000000.0,
+                "net_value": 114000000.0,
+                "liquid_isk_per_hour": 150000000.0,
+                "lp_value_per_hour": 420000000.0,
+                "net_per_hour": 570000000.0
+            },
+            "hourly": [],
+            "sites": [
+                {
+                    "occurred_at": "2026-07-29T23:00:00Z",
+                    "amount_isk": 15000000,
+                    "fleet_lp": 30000,
+                    "gap_seconds": 360,
+                    "duration_seconds": 360,
+                    "is_break": false,
+                    "counts_toward_avg": true
+                }
+            ]
+        }"#;
+
+        let report: AnalyticsReport = serde_json::from_str(legacy).expect("legacy report parses");
+        assert_eq!(report.session.sites_ran, 2);
+        assert_eq!(report.session.active_site_seconds, 720);
+        assert_eq!(report.session.character_liquid_isk, 30_000_000);
+        // No fleet scaling was recorded back then: degrade to character ISK.
+        assert_eq!(report.session.fleet_liquid_isk, 30_000_000);
+        assert_eq!(report.session.wallet_elapsed_seconds, 0);
+        assert_eq!(report.session.lp_per_character_total, None);
+        assert_eq!(report.sites[0].fleet_isk, 15_000_000);
     }
 
     #[test]

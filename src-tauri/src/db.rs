@@ -14,6 +14,38 @@ pub struct Db {
     pool: Pool<Sqlite>,
 }
 
+/// Stored reports for a scope, plus the runs whose `report_json` could not
+/// be read. Unreadable rows are counted so the UI can say so instead of
+/// silently aggregating fewer runs than the catalog shows.
+#[derive(Debug, Clone, Default)]
+pub struct ReportRows {
+    pub reports: Vec<AnalyticsReport>,
+    pub unreadable: Vec<String>,
+}
+
+impl ReportRows {
+    fn from_rows(rows: Vec<(String, String)>) -> Self {
+        let mut out = Self::default();
+        for (run_id, json) in rows {
+            match parse_report(&run_id, &json) {
+                Some(report) => out.reports.push(report),
+                None => out.unreadable.push(run_id),
+            }
+        }
+        out
+    }
+}
+
+fn parse_report(run_id: &str, json: &str) -> Option<AnalyticsReport> {
+    match serde_json::from_str(json) {
+        Ok(report) => Some(report),
+        Err(err) => {
+            eprintln!("Unreadable report_json for run {run_id}: {err}");
+            None
+        }
+    }
+}
+
 impl Db {
     pub async fn open(path: &Path) -> Result<Self, sqlx::Error> {
         if let Some(parent) = path.parent() {
@@ -258,31 +290,28 @@ impl Db {
                 .bind(run_id)
                 .fetch_optional(&self.pool)
                 .await?;
-        Ok(row.and_then(|(json,)| serde_json::from_str(&json).ok()))
+        Ok(row.and_then(|(json,)| parse_report(run_id, &json)))
     }
 
     pub async fn load_reports_for_spawn(
         &self,
         constellation: &str,
-    ) -> Result<Vec<AnalyticsReport>, sqlx::Error> {
-        let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT report_json FROM analytics_runs WHERE constellation = ?")
-                .bind(constellation)
-                .fetch_all(&self.pool)
-                .await?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|(json,)| serde_json::from_str(&json).ok())
-            .collect())
+    ) -> Result<ReportRows, sqlx::Error> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT run_id, report_json FROM analytics_runs WHERE constellation = ?",
+        )
+        .bind(constellation)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(ReportRows::from_rows(rows))
     }
 
-    pub async fn load_all_reports(&self) -> Result<Vec<AnalyticsReport>, sqlx::Error> {
-        let rows: Vec<(String,)> =
-            sqlx::query_as("SELECT report_json FROM analytics_runs").fetch_all(&self.pool).await?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|(json,)| serde_json::from_str(&json).ok())
-            .collect())
+    pub async fn load_all_reports(&self) -> Result<ReportRows, sqlx::Error> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT run_id, report_json FROM analytics_runs")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(ReportRows::from_rows(rows))
     }
 
     pub async fn get_settings(&self) -> Result<AppSettings, sqlx::Error> {

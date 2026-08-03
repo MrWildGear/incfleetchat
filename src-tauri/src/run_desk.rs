@@ -292,7 +292,7 @@ impl RunDesk {
 
     async fn snapshot(&self) -> Result<EditionFocus, String> {
         let catalog = self.db.load_catalog().await.map_err(|e| e.to_string())?;
-        let (trays, spawn, scope, diagnostics, settings, staging_spawn, sealed_run_id) = {
+        let (trays, spawn, scope, mut diagnostics, settings, staging_spawn, sealed_run_id) = {
             let st = self.inner.lock();
             let trays = TrayState {
                 manifest: if st.staging_spawn
@@ -346,7 +346,8 @@ impl RunDesk {
             )
         };
 
-        let report = self.report_for_scope(&scope, &settings).await?;
+        let (report, report_diagnostics) = self.report_for_scope(&scope, &settings).await?;
+        diagnostics.extend(report_diagnostics);
         let enrichment = self.enrichment_for_scope(&scope, &sealed_run_id).await?;
 
         Ok(EditionFocus {
@@ -380,38 +381,55 @@ impl RunDesk {
         }
     }
 
+    /// Report for the focused scope, plus diagnostics for stored runs whose
+    /// `report_json` could not be read (they are excluded from aggregates).
     async fn report_for_scope(
         &self,
         scope: &ReportScope,
         settings: &RunSettings,
-    ) -> Result<Option<AnalyticsReport>, String> {
-        match scope {
-            ReportScope::Overall => {
-                let reports = self.db.load_all_reports().await.map_err(|e| e.to_string())?;
-                if reports.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(merge_reports(&reports, settings.isk_per_lp)))
-                }
-            }
-            ReportScope::Spawn { constellation } => {
-                let reports = self
+    ) -> Result<(Option<AnalyticsReport>, Vec<Diagnostic>), String> {
+        let rows = match scope {
+            ReportScope::Overall => self.db.load_all_reports().await.map_err(|e| e.to_string())?,
+            ReportScope::Spawn { constellation } => self
+                .db
+                .load_reports_for_spawn(constellation)
+                .await
+                .map_err(|e| e.to_string())?,
+            ReportScope::Run { run_id } => {
+                let report = self
                     .db
-                    .load_reports_for_spawn(constellation)
+                    .load_report(run_id)
                     .await
                     .map_err(|e| e.to_string())?;
-                if reports.is_empty() {
-                    Ok(None)
+                let diagnostics = if report.is_none() {
+                    vec![Diagnostic {
+                        level: "warn".into(),
+                        message: format!("Run {run_id} has no readable saved report"),
+                    }]
                 } else {
-                    Ok(Some(merge_reports(&reports, settings.isk_per_lp)))
-                }
+                    Vec::new()
+                };
+                return Ok((report, diagnostics));
             }
-            ReportScope::Run { run_id } => self
-                .db
-                .load_report(run_id)
-                .await
-                .map_err(|e| e.to_string()),
+        };
+
+        let mut diagnostics = Vec::new();
+        if !rows.unreadable.is_empty() {
+            diagnostics.push(Diagnostic {
+                level: "warn".into(),
+                message: format!(
+                    "{} saved run(s) skipped — unreadable report: {}",
+                    rows.unreadable.len(),
+                    rows.unreadable.join(", ")
+                ),
+            });
         }
+        let report = if rows.reports.is_empty() {
+            None
+        } else {
+            Some(merge_reports(&rows.reports, settings.isk_per_lp))
+        };
+        Ok((report, diagnostics))
     }
 }
 
