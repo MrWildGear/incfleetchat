@@ -31,7 +31,7 @@ pub enum AmendOp {
     SetConstellation { constellation: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Diagnostic {
     pub level: String,
     pub message: String,
@@ -78,4 +78,50 @@ pub struct EditionFocus {
 pub struct Catalog {
     pub spawns: Vec<SpawnSummary>,
     pub runs: Vec<RunSummary>,
+}
+
+/// Where a site row's warp/in-site split came from.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrichmentSource {
+    Fc,
+    Borrowed,
+    Heuristic,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EnrichmentSite {
+    pub occurred_at: DateTime<Utc>,
+    pub warp_seconds: i64,
+    pub in_site_seconds: i64,
+    pub is_break: bool,
+    pub source: EnrichmentSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MissileStat {
+    pub listener: String,
+    pub reload_cycles: u32,
+    pub hits: u32,
+    pub missiles_per_cycle: u32,
+    pub dead: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EnrichmentTotals {
+    pub warp_seconds: i64,
+    pub in_site_seconds: i64,
+    pub avg_in_site_seconds: Option<f64>,
+    pub fleet_dead: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EnrichmentSnapshot {
+    pub resolved_fc: Option<String>,
+    /// Listener headers used (all listeners with logs in range).
+    pub listeners: Vec<String>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub sites: Vec<EnrichmentSite>,
+    pub missiles: Vec<MissileStat>,
+    pub totals: EnrichmentTotals,
 }

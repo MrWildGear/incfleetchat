@@ -3,6 +3,7 @@ mod board;
 mod commands;
 mod db;
 mod encoding;
+mod enrichment;
 mod gamelog_parse;
 mod gamelog_scan;
 mod parse;
