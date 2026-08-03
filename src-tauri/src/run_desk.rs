@@ -517,6 +517,8 @@ Immensea
 <b>Sansha's Nation Frenzy</b> - Scourge Rage Heavy Missile - Hits\n",
         )
         .unwrap();
+        // Headerless file: the scan must skip it and say so.
+        fs::write(gamelogs_dir.join("truncated.txt"), "no header here\n").unwrap();
 
         let db = Db::open(&dir.path().join("t.db")).await.unwrap();
         let mut app_settings = db.get_settings().await.unwrap();
@@ -563,14 +565,13 @@ Immensea
         assert_eq!(enrichment.sites[1].warp_seconds, 90);
         assert_eq!(enrichment.sites[1].in_site_seconds, 180);
 
-        // Scan diagnostics ride along on the snapshot (the unreadable/headerless
-        // files this scan skipped, if any, plus enrichment's own warnings).
+        // Files the scan had to skip are reported on the snapshot.
         assert!(
             enrichment
                 .diagnostics
                 .iter()
-                .all(|d| d.level == "warn" || d.level == "info"),
-            "unexpected diagnostic levels: {:?}",
+                .any(|d| d.message.contains("Skipped gamelog without Session Started")),
+            "diagnostics: {:?}",
             enrichment.diagnostics
         );
 
