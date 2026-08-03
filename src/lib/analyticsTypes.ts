@@ -134,6 +134,8 @@ export type EditionFocus = {
   diagnostics: { level: string; message: string }[];
   session_settings: RunSettings;
   staging_spawn: SpawnDraft | null;
+  /** Most recently sealed run in this session; re-enrichable at any scope. */
+  sealed_run_id: string | null;
   enrichment: EnrichmentSnapshot | null;
 };
 

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::analytics_types::*;
 use crate::db::Db;
 use crate::enrichment::enrich_run;
-use crate::gamelog_scan::{default_gamelogs_dir, scan_gamelogs};
+use crate::gamelog_scan::{default_gamelogs_dir, scan_gamelogs, ScanResult};
 use crate::spawn_parse::{parse_manifest, SpawnDraft};
 use crate::timing::{build_report, merge_reports, AnalyticsReport, RunSettings};
 use crate::wallet_parse::{extract_wallet_fc_hint, parse_wallet_journal, WalletPayout};
@@ -175,8 +175,9 @@ impl RunDesk {
     }
 
     /// Scan gamelogs for `run_id`'s wallet window and persist an
-    /// `EnrichmentSnapshot`. No-op (not an error) when no gamelogs directory
-    /// is configured/present or the run has no sites.
+    /// `EnrichmentSnapshot`. A missing gamelogs directory is a warning, not
+    /// an error: an empty snapshot carrying that warning is saved so the v1
+    /// report stays intact and the reason is visible in Tools.
     async fn enrich_and_save(
         &self,
         run_id: &str,
@@ -198,23 +199,30 @@ impl RunDesk {
             .filter(|d| !d.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(default_gamelogs_dir);
-        if !gamelogs_dir.is_dir() {
-            return Ok(());
-        }
-
         let wallet_start = settings.run_start.unwrap_or(site_times[0]);
         let wallet_end = *site_times.last().unwrap();
-        let scan = scan_gamelogs(&gamelogs_dir, wallet_start, wallet_end);
+
+        let missiles_per_cycle = (app_settings.ammo_launchers.max(0) as u32)
+            .saturating_mul(app_settings.ammo_per_launcher.max(0) as u32);
+
+        let scan = if gamelogs_dir.is_dir() {
+            scan_gamelogs(&gamelogs_dir, wallet_start, wallet_end)
+        } else {
+            ScanResult {
+                logs: Vec::new(),
+                diagnostics: vec![format!(
+                    "Gamelogs directory not found: {} — enrichment unavailable",
+                    gamelogs_dir.display()
+                )],
+            }
+        };
 
         let wallet_fc_hint = parse_wallet_journal(wallet_text, settings.expected_isk)
             .events
             .first()
             .and_then(|e| extract_wallet_fc_hint(&e.description));
 
-        let missiles_per_cycle = (app_settings.ammo_launchers.max(0) as u32)
-            .saturating_mul(app_settings.ammo_per_launcher.max(0) as u32);
-
-        let snapshot = enrich_run(
+        let mut snapshot = enrich_run(
             &scan.logs,
             &site_times,
             settings.break_threshold_minutes,
@@ -223,6 +231,12 @@ impl RunDesk {
             app_settings.fc_character.as_deref(),
             wallet_fc_hint.as_deref(),
         );
+        snapshot
+            .diagnostics
+            .extend(scan.diagnostics.into_iter().map(|message| Diagnostic {
+                level: "warn".into(),
+                message,
+            }));
 
         self.db
             .save_enrichment(run_id, &snapshot)
@@ -359,6 +373,7 @@ impl RunDesk {
             diagnostics,
             session_settings: settings,
             staging_spawn,
+            sealed_run_id,
             enrichment,
         })
     }
@@ -548,11 +563,67 @@ Immensea
         assert_eq!(enrichment.sites[1].warp_seconds, 90);
         assert_eq!(enrichment.sites[1].in_site_seconds, 180);
 
+        // Scan diagnostics ride along on the snapshot (the unreadable/headerless
+        // files this scan skipped, if any, plus enrichment's own warnings).
+        assert!(
+            enrichment
+                .diagnostics
+                .iter()
+                .all(|d| d.level == "warn" || d.level == "info"),
+            "unexpected diagnostic levels: {:?}",
+            enrichment.diagnostics
+        );
+
         // Re-enrich via amend without a run_id → falls back to the sealed run.
         let refocused = desk
             .amend(AmendOp::ReenrichRun { run_id: None })
             .await
             .unwrap();
         assert!(refocused.enrichment.is_some());
+        assert!(refocused.sealed_run_id.is_some());
+    }
+
+    /// Missing gamelogs dir is a warning, not a failure: the v1 report stands
+    /// and an empty snapshot explains why enrichment is empty.
+    #[tokio::test]
+    async fn missing_gamelogs_dir_warns_and_keeps_report() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).await.unwrap();
+        let mut app_settings = db.get_settings().await.unwrap();
+        app_settings.gamelogs_dir =
+            Some(dir.path().join("nope").join("Gamelogs").to_string_lossy().to_string());
+        db.set_settings(&app_settings).await.unwrap();
+
+        let desk = RunDesk::new(db);
+        let manifest = "\
+New Null-Sec Incursion: 4MY-AB - Immensea
+Constellation
+4MY-AB
+Region
+Immensea
+";
+        desk.paste(Tray::Manifest, manifest).await.unwrap();
+        let wallet = "\
+2026.07.29 23:08\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\tx\n\
+2026.07.29 23:14\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\ty\n";
+        desk.paste(Tray::Wallet, wallet).await.unwrap();
+
+        let focus = desk.analyze().await.unwrap();
+
+        assert_eq!(focus.report.as_ref().unwrap().session.sites_ran, 2);
+        let enrichment = focus
+            .enrichment
+            .expect("an empty snapshot carrying the warning is still saved");
+        assert!(enrichment.listeners.is_empty());
+        assert!(
+            enrichment
+                .diagnostics
+                .iter()
+                .any(|d| d.level == "warn" && d.message.contains("Gamelogs directory not found")),
+            "diagnostics: {:?}",
+            enrichment.diagnostics
+        );
+        // Re-enrich stays available: there is a sealed run to recompute.
+        assert!(focus.sealed_run_id.is_some());
     }
 }

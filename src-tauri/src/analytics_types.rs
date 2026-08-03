@@ -75,6 +75,9 @@ pub struct EditionFocus {
     pub diagnostics: Vec<Diagnostic>,
     pub session_settings: RunSettings,
     pub staging_spawn: Option<SpawnDraft>,
+    /// Most recently sealed run in this session; enrichment can be recomputed
+    /// for it even while the scope is a spawn aggregate.
+    pub sealed_run_id: Option<String>,
     pub enrichment: Option<EnrichmentSnapshot>,
 }
 
