@@ -14,6 +14,12 @@ pub struct Db {
     pool: Pool<Sqlite>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteRunOutcome {
+    pub constellation: String,
+    pub spawn_removed: bool,
+}
+
 /// Stored reports for a scope, plus the runs whose `report_json` could not
 /// be read. Unreadable rows are counted so the UI can say so instead of
 /// silently aggregating fewer runs than the catalog shows.
@@ -441,6 +447,90 @@ impl Db {
         }
         Ok(())
     }
+
+    pub async fn delete_run(&self, run_id: &str) -> Result<DeleteRunOutcome, String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT constellation FROM analytics_runs WHERE run_id = ?")
+                .bind(run_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        let constellation = row
+            .map(|(c,)| c)
+            .ok_or_else(|| format!("Run {run_id} not found"))?;
+
+        sqlx::query("DELETE FROM analytics_runs WHERE run_id = ?")
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let (remaining,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM analytics_runs WHERE constellation = ?")
+                .bind(&constellation)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+
+        let spawn_removed = if remaining == 0 {
+            sqlx::query("DELETE FROM spawns WHERE constellation = ?")
+                .bind(&constellation)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+            true
+        } else {
+            false
+        };
+
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(DeleteRunOutcome {
+            constellation,
+            spawn_removed,
+        })
+    }
+
+    pub async fn delete_spawn(&self, constellation: &str) -> Result<(), String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let (exists,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM spawns WHERE constellation = ?")
+                .bind(constellation)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        if exists == 0 {
+            return Err(format!("Spawn {constellation} not found"));
+        }
+
+        sqlx::query("DELETE FROM analytics_runs WHERE constellation = ?")
+            .bind(constellation)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM spawns WHERE constellation = ?")
+            .bind(constellation)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub async fn clear_all_analytics(&self) -> Result<(), String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM analytics_runs")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        sqlx::query("DELETE FROM spawns")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -552,5 +642,113 @@ mod tests {
         assert_eq!(loaded_settings.fleet_size, settings.fleet_size);
         assert_eq!(loaded_report.session.sites_ran, 0);
         assert_eq!(wallet_text, "wallet");
+    }
+
+    use crate::timing::{build_report, RunSettings};
+
+    #[tokio::test]
+    async fn delete_run_removes_row_and_keeps_spawn_when_siblings_remain() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let settings = RunSettings::default();
+        let report = build_report(&[], &settings);
+        db.upsert_spawn("4MY-AB", None).await.unwrap();
+        db.save_run("run-a", "4MY-AB", &settings, "", "", &report)
+            .await
+            .unwrap();
+        db.save_run("run-b", "4MY-AB", &settings, "", "", &report)
+            .await
+            .unwrap();
+
+        let out = db.delete_run("run-a").await.unwrap();
+        assert_eq!(
+            out,
+            DeleteRunOutcome {
+                constellation: "4MY-AB".into(),
+                spawn_removed: false,
+            }
+        );
+        let cat = db.load_catalog().await.unwrap();
+        assert_eq!(cat.runs.len(), 1);
+        assert_eq!(cat.runs[0].run_id, "run-b");
+        assert_eq!(cat.spawns.len(), 1);
+        assert_eq!(cat.spawns[0].run_count, 1);
+    }
+
+    #[tokio::test]
+    async fn delete_run_last_run_removes_empty_spawn() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let settings = RunSettings::default();
+        let report = build_report(&[], &settings);
+        db.upsert_spawn("4MY-AB", None).await.unwrap();
+        db.save_run("run-only", "4MY-AB", &settings, "", "", &report)
+            .await
+            .unwrap();
+
+        let out = db.delete_run("run-only").await.unwrap();
+        assert!(out.spawn_removed);
+        let cat = db.load_catalog().await.unwrap();
+        assert!(cat.runs.is_empty());
+        assert!(cat.spawns.is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_run_unknown_id_errors() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let err = db.delete_run("missing").await.unwrap_err();
+        assert!(err.contains("missing") || err.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn delete_spawn_removes_runs_and_spawn() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let settings = RunSettings::default();
+        let report = build_report(&[], &settings);
+        db.upsert_spawn("4MY-AB", None).await.unwrap();
+        db.upsert_spawn("OTHER", None).await.unwrap();
+        db.save_run("r1", "4MY-AB", &settings, "", "", &report)
+            .await
+            .unwrap();
+        db.save_run("r2", "4MY-AB", &settings, "", "", &report)
+            .await
+            .unwrap();
+        db.save_run("r3", "OTHER", &settings, "", "", &report)
+            .await
+            .unwrap();
+
+        db.delete_spawn("4MY-AB").await.unwrap();
+        let cat = db.load_catalog().await.unwrap();
+        assert_eq!(cat.spawns.len(), 1);
+        assert_eq!(cat.spawns[0].constellation, "OTHER");
+        assert_eq!(cat.runs.len(), 1);
+        assert_eq!(cat.runs[0].run_id, "r3");
+    }
+
+    #[tokio::test]
+    async fn delete_spawn_unknown_errors() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let err = db.delete_spawn("NOPE").await.unwrap_err();
+        assert!(err.contains("NOPE") || err.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn clear_all_analytics_empties_both_tables() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let settings = RunSettings::default();
+        let report = build_report(&[], &settings);
+        db.upsert_spawn("4MY-AB", None).await.unwrap();
+        db.save_run("r1", "4MY-AB", &settings, "", "", &report)
+            .await
+            .unwrap();
+
+        db.clear_all_analytics().await.unwrap();
+        let cat = db.load_catalog().await.unwrap();
+        assert!(cat.runs.is_empty());
+        assert!(cat.spawns.is_empty());
     }
 }
