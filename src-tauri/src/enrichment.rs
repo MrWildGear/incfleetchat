@@ -186,7 +186,31 @@ fn align_gap(
     (warp_seconds, in_site_seconds, false, last_source)
 }
 
-/// Compute per-listener dead missiles over the whole scanned window.
+/// Copy of `logs` keeping only events inside the sealed run's window.
+///
+/// `scan_gamelogs` selects whole files by session-start overlap, so a file
+/// can carry hours of events from before or after the run. Missile math and
+/// FC resolution must see only the run itself.
+fn clip_to_window(
+    logs: &[ListenerLog],
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Vec<ListenerLog> {
+    logs.iter()
+        .map(|l| ListenerLog {
+            listener: l.listener.clone(),
+            path: l.path.clone(),
+            events: l
+                .events
+                .iter()
+                .filter(|e| e.occurred_at >= start && e.occurred_at <= end)
+                .cloned()
+                .collect(),
+        })
+        .collect()
+}
+
+/// Compute per-listener dead missiles over the run window.
 fn missile_stats(logs: &[ListenerLog], missiles_per_cycle: u32) -> Vec<MissileStat> {
     logs.iter()
         .map(|l| {
@@ -230,6 +254,18 @@ pub fn enrich_run(
             message: "No listeners with gamelogs in range; enrichment skipped.".to_string(),
         });
     }
+
+    // Everything below (alignment, FC resolution, missiles) is scoped to the
+    // sealed run's window: run_start (or the first payout) → last payout.
+    let window = site_times.first().map(|first| {
+        let start = run_start.map(|rs| rs.min(*first)).unwrap_or(*first);
+        (start, *site_times.last().unwrap())
+    });
+    let clipped: Vec<ListenerLog> = match window {
+        Some((start, end)) => clip_to_window(logs, start, end),
+        None => logs.to_vec(),
+    };
+    let logs: &[ListenerLog] = &clipped;
 
     let resolved_fc = resolve_fc(logs, fc_character, wallet_fc_hint);
 
@@ -447,6 +483,94 @@ mod tests {
         assert_eq!(snap.totals.avg_in_site_seconds, Some(480.0));
         assert_eq!(snap.totals.warp_seconds, 120);
         assert_eq!(snap.totals.in_site_seconds, 480);
+    }
+
+    /// Events from earlier/later sessions in the same gamelog file must not
+    /// leak into missile math or FC resolution.
+    #[test]
+    fn events_outside_run_window_are_ignored() {
+        let fc = listener_log(
+            "FC Pilot",
+            vec![
+                // Before the run: would otherwise make FC look like a member.
+                ev(18, 0, 0, GamelogEventKind::FollowingWarp),
+                ev(18, 0, 5, GamelogEventKind::FollowingWarp),
+                // Before the run: would otherwise add 156 expended missiles.
+                ev(18, 1, 0, GamelogEventKind::Reload),
+                ev(20, 3, 0, GamelogEventKind::CombatAny),
+            ],
+        );
+        let member = listener_log(
+            "Member Pilot",
+            vec![
+                ev(20, 1, 0, GamelogEventKind::FollowingWarp),
+                // After the last payout: also out of window.
+                ev(22, 0, 0, GamelogEventKind::Reload),
+            ],
+        );
+        let logs = vec![fc, member];
+        let sites = vec![ts(20, 0, 0), ts(20, 8, 0)];
+
+        let snap = enrich_run(&logs, &sites, 25, Some(ts(19, 55, 0)), 156, None, None);
+
+        assert_eq!(
+            snap.resolved_fc.as_deref(),
+            Some("FC Pilot"),
+            "pre-run warps must not count toward fewest-warps FC resolution"
+        );
+        assert_eq!(snap.totals.fleet_dead, 0);
+        for m in &snap.missiles {
+            assert_eq!(m.reload_cycles, 0, "listener {}", m.listener);
+        }
+    }
+
+    /// Two FC warps inside one gap: both warp legs count, and the stretch
+    /// between the first leg's end marker and the second warp is in-site.
+    #[test]
+    fn multi_warp_gap_sums_both_legs() {
+        let fc = listener_log(
+            "FC Pilot",
+            vec![
+                ev(20, 1, 0, GamelogEventKind::FollowingWarp),
+                ev(20, 2, 0, GamelogEventKind::CombatAny),
+                ev(20, 5, 0, GamelogEventKind::FollowingWarp),
+                ev(20, 6, 30, GamelogEventKind::CombatHit),
+            ],
+        );
+        let logs = vec![fc];
+        let sites = vec![ts(20, 0, 0), ts(20, 8, 0)];
+
+        let snap = enrich_run(&logs, &sites, 25, Some(ts(19, 55, 0)), 156, Some("FC Pilot"), None);
+
+        let site = &snap.sites[1];
+        // Warp legs: 20:01→20:02 (60s) and 20:05→20:06:30 (90s).
+        assert_eq!(site.warp_seconds, 150);
+        // In-site: 20:02→20:05 (180s) plus 20:06:30→payout (90s).
+        assert_eq!(site.in_site_seconds, 270);
+        assert_eq!(site.source, EnrichmentSource::Fc);
+        assert!(!site.is_break);
+    }
+
+    /// A gap longer than the break threshold is still a real site when the
+    /// FC's markers show a warp into it.
+    #[test]
+    fn long_gap_with_markers_is_not_a_break() {
+        let fc = listener_log(
+            "FC Pilot",
+            vec![
+                ev(20, 5, 0, GamelogEventKind::FollowingWarp),
+                ev(20, 8, 0, GamelogEventKind::CombatHit),
+            ],
+        );
+        let logs = vec![fc];
+        let sites = vec![ts(20, 0, 0), ts(20, 40, 0)];
+
+        let snap = enrich_run(&logs, &sites, 25, Some(ts(19, 55, 0)), 156, Some("FC Pilot"), None);
+
+        let site = &snap.sites[1];
+        assert!(!site.is_break);
+        assert_eq!(site.warp_seconds, 180);
+        assert_eq!(site.in_site_seconds, 32 * 60);
     }
 
     #[test]
