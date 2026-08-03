@@ -1,4 +1,5 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { Pin, Settings, Wrench } from "lucide-react";
 import { useAppStore } from "./store";
 import { SiteRowView, derivePhase } from "./components/SiteRow";
@@ -22,6 +23,7 @@ function statusLabel(status: BoardStatus): string {
 }
 
 function App() {
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   const board = useAppStore((s) => s.board);
   const settings = useAppStore((s) => s.settings);
   const nowMs = useAppStore((s) => s.nowMs);
@@ -36,6 +38,12 @@ function App() {
   useEffect(() => {
     void hydrate();
   }, [hydrate]);
+
+  useEffect(() => {
+    void getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(null));
+  }, []);
 
   useEffect(() => {
     const id = window.setInterval(() => tick(), 1000);
@@ -61,7 +69,14 @@ function App() {
     <div className="flex h-full flex-col bg-surface text-fg">
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
         <div className="min-w-0 flex-1">
-          <h1 className="text-sm font-semibold tracking-tight">IncFleetChat</h1>
+          <h1 className="text-sm font-semibold tracking-tight">
+            IncFleetChat
+            {appVersion ? (
+              <span className="ml-1.5 text-[10px] font-normal tabular-nums text-muted">
+                v{appVersion}
+              </span>
+            ) : null}
+          </h1>
           <p className="truncate text-xs text-muted">{statusLabel(board.status)}</p>
         </div>
         <button
