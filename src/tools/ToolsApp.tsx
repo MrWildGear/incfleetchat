@@ -443,10 +443,27 @@ export function ToolsApp() {
             </ul>
           ) : null}
 
-          <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1fr_280px]">
+          <div className="flex shrink-0 items-center justify-between gap-2">
+            <h2 className="text-xs font-semibold text-muted">Results</h2>
+            <button
+              type="button"
+              disabled={!focus?.report?.sites?.length}
+              onClick={() => setShowDrilldown((v) => !v)}
+              className={cn(
+                "rounded border px-2 py-1 text-xs",
+                focus?.report?.sites?.length
+                  ? "border-accent/40 text-accent hover:bg-accent/10"
+                  : "cursor-not-allowed border-border text-muted/40",
+              )}
+            >
+              {showDrilldown ? "Hide site list" : "Per-site drill-down"}
+            </button>
+          </div>
+
+          <div className="grid max-h-[40vh] shrink-0 gap-3 lg:grid-cols-[1fr_280px]">
             <div className="overflow-auto rounded border border-border">
               <table className="w-full text-left text-xs">
-                <thead className="sticky top-0 bg-surface-raised text-muted">
+                <thead className="sticky top-0 z-10 bg-surface-raised text-muted">
                   <tr>
                     <th className="px-2 py-1">Hour</th>
                     <th className="px-2 py-1">Total ISK</th>
@@ -480,11 +497,18 @@ export function ToolsApp() {
               </table>
             </div>
 
-            <aside className="space-y-2 rounded border border-border bg-surface-raised p-3 text-xs">
+            <aside className="space-y-2 overflow-auto rounded border border-border bg-surface-raised p-3 text-xs">
               <h2 className="font-semibold">Summary</h2>
               {session ? (
                 <>
-                  <Row label="Time spent" value={formatDuration(session.time_spent_seconds)} />
+                  <Row
+                    label="Time spent"
+                    value={formatDuration(session.active_site_seconds)}
+                  />
+                  <Row
+                    label="Wallet elapsed"
+                    value={formatDuration(session.wallet_elapsed_seconds)}
+                  />
                   <Row label="Sites ran" value={String(session.sites_ran)} />
                   <Row
                     label="Avg site time"
@@ -500,53 +524,74 @@ export function ToolsApp() {
                   />
                   <Row label="Net/hr" value={formatIsk(session.net_per_hour)} />
                   <Row label="Net LP" value={formatIsk(session.net_lp)} />
+                  {session.lp_per_character_total != null && (
+                    <Row
+                      label="Per character LP"
+                      value={formatIsk(session.lp_per_character_total)}
+                    />
+                  )}
+                  <Row label="ISK / LP" value={formatIsk(settings.isk_per_lp)} />
+                  <Row
+                    label="Liquid Value"
+                    value={formatIsk(session.fleet_liquid_isk)}
+                  />
                   <Row label="LP value" value={formatIsk(session.lp_value)} />
-                  <Row label="Liquid ISK" value={formatIsk(session.liquid_isk)} />
                   <Row label="Net value" value={formatIsk(session.net_value)} />
+                  <Row
+                    label="Character liquid"
+                    value={formatIsk(session.character_liquid_isk)}
+                  />
                 </>
               ) : (
                 <p className="text-muted">No aggregate for this scope.</p>
               )}
-              <button
-                type="button"
-                className="mt-2 text-accent underline"
-                onClick={() => setShowDrilldown((v) => !v)}
-              >
-                {showDrilldown ? "Hide" : "Show"} per-site drill-down
-              </button>
             </aside>
           </div>
 
           {showDrilldown && focus?.report?.sites?.length ? (
-            <div className="overflow-auto rounded border border-border">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-surface-raised text-muted">
-                  <tr>
-                    <th className="px-2 py-1">Time</th>
-                    <th className="px-2 py-1">Gap</th>
-                    <th className="px-2 py-1">Duration</th>
-                    <th className="px-2 py-1">Break?</th>
-                    <th className="px-2 py-1">ISK</th>
-                    <th className="px-2 py-1">LP</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {focus.report.sites.map((s, i) => (
-                    <tr key={i} className="border-t border-border">
-                      <td className="px-2 py-1">
-                        {new Date(s.occurred_at).toLocaleString()}
-                      </td>
-                      <td className="px-2 py-1">{formatDuration(s.gap_seconds)}</td>
-                      <td className="px-2 py-1">
-                        {formatDuration(s.duration_seconds)}
-                      </td>
-                      <td className="px-2 py-1">{s.is_break ? "yes" : ""}</td>
-                      <td className="px-2 py-1">{formatIsk(s.amount_isk)}</td>
-                      <td className="px-2 py-1">{formatIsk(s.fleet_lp)}</td>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-border">
+              <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-b border-border bg-surface-raised px-3 py-2">
+                <h3 className="text-xs font-semibold">
+                  Per-site detail ({focus.report.sites.length})
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowDrilldown(false)}
+                  className="rounded border border-border px-2 py-1 text-xs hover:border-accent/40 hover:text-accent"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 z-10 bg-surface text-muted">
+                    <tr>
+                      <th className="px-2 py-1">Time</th>
+                      <th className="px-2 py-1">Gap</th>
+                      <th className="px-2 py-1">Duration</th>
+                      <th className="px-2 py-1">Break?</th>
+                      <th className="px-2 py-1">ISK</th>
+                      <th className="px-2 py-1">LP</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {focus.report.sites.map((s, i) => (
+                      <tr key={i} className="border-t border-border">
+                        <td className="px-2 py-1">
+                          {new Date(s.occurred_at).toLocaleString()}
+                        </td>
+                        <td className="px-2 py-1">{formatDuration(s.gap_seconds)}</td>
+                        <td className="px-2 py-1">
+                          {formatDuration(s.duration_seconds)}
+                        </td>
+                        <td className="px-2 py-1">{s.is_break ? "yes" : ""}</td>
+                        <td className="px-2 py-1">{formatIsk(s.amount_isk)}</td>
+                        <td className="px-2 py-1">{formatIsk(s.fleet_lp)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           ) : null}
         </div>

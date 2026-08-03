@@ -78,7 +78,7 @@ fn pad_us_datetime(s: &str) -> Option<String> {
 /// Extract labeled fields from a Discord/bot Manifest paste.
 pub fn parse_manifest(text: &str) -> SpawnDraft {
     let mut draft = SpawnDraft::default();
-    let mut lines: Vec<&str> = text
+    let lines: Vec<&str> = text
         .lines()
         .map(|l| l.trim().trim_start_matches('\u{feff}'))
         .filter(|l| !l.is_empty())

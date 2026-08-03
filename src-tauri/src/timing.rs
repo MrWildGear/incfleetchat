@@ -33,7 +33,10 @@ impl Default for RunSettings {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SiteDetail {
     pub occurred_at: DateTime<Utc>,
+    /// Character (wallet) ISK for this payout.
     pub amount_isk: i64,
+    /// `amount_isk × fleet_size` at analyze time.
+    pub fleet_isk: i64,
     pub fleet_lp: i64,
     pub gap_seconds: Option<i64>,
     pub duration_seconds: Option<i64>,
@@ -44,6 +47,7 @@ pub struct SiteDetail {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct HourlyBucket {
     pub hour_start: DateTime<Utc>,
+    /// Fleet ISK in this hour.
     pub total_isk: i64,
     pub total_lp: i64,
     pub sites: u32,
@@ -53,10 +57,14 @@ pub struct HourlyBucket {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionSummary {
     pub sites_ran: u32,
-    pub time_spent_seconds: i64,
+    pub active_site_seconds: i64,
+    pub wallet_elapsed_seconds: i64,
     pub avg_site_seconds: Option<f64>,
-    pub liquid_isk: i64,
+    pub character_liquid_isk: i64,
+    pub fleet_liquid_isk: i64,
     pub net_lp: i64,
+    /// Null when fleet size is ambiguous (merged mixed runs without per-run LP totals).
+    pub lp_per_character_total: Option<i64>,
     pub lp_value: f64,
     pub net_value: f64,
     pub liquid_isk_per_hour: f64,
@@ -78,10 +86,110 @@ fn hour_floor(ts: DateTime<Utc>) -> DateTime<Utc> {
         .unwrap_or(ts)
 }
 
+fn wallet_elapsed_seconds(sites: &[SiteDetail]) -> i64 {
+    if sites.len() < 2 {
+        return 0;
+    }
+    let first = sites.first().unwrap().occurred_at;
+    let last = sites.last().unwrap().occurred_at;
+    (last - first).num_seconds().max(0)
+}
+
+fn summarize_sites(
+    sites: &[SiteDetail],
+    isk_per_lp: f64,
+    lp_per_character_total: Option<i64>,
+) -> (SessionSummary, Vec<HourlyBucket>) {
+    let sites_ran = sites.len() as u32;
+    let character_liquid_isk: i64 = sites.iter().map(|s| s.amount_isk).sum();
+    let fleet_liquid_isk: i64 = sites.iter().map(|s| s.fleet_isk).sum();
+    let net_lp: i64 = sites.iter().map(|s| s.fleet_lp).sum();
+    let timed: Vec<i64> = sites
+        .iter()
+        .filter(|s| s.counts_toward_avg)
+        .filter_map(|s| s.duration_seconds)
+        .collect();
+    let active_site_seconds: i64 = timed.iter().sum();
+    let avg_site_seconds = if timed.is_empty() {
+        None
+    } else {
+        Some(active_site_seconds as f64 / timed.len() as f64)
+    };
+    let wallet_elapsed_seconds = wallet_elapsed_seconds(sites);
+
+    let lp_value = net_lp as f64 * isk_per_lp;
+    let net_value = fleet_liquid_isk as f64 + lp_value;
+    let active_hours = if active_site_seconds > 0 {
+        active_site_seconds as f64 / 3600.0
+    } else {
+        0.0
+    };
+    let (liquid_isk_per_hour, lp_value_per_hour, net_per_hour) = if active_hours > 0.0 {
+        (
+            fleet_liquid_isk as f64 / active_hours,
+            lp_value / active_hours,
+            net_value / active_hours,
+        )
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    use std::collections::BTreeMap;
+    let mut buckets: BTreeMap<i64, Vec<&SiteDetail>> = BTreeMap::new();
+    for s in sites {
+        let h = hour_floor(s.occurred_at);
+        buckets.entry(h.timestamp()).or_default().push(s);
+    }
+    let hourly: Vec<HourlyBucket> = buckets
+        .into_iter()
+        .map(|(_, group)| {
+            let hour_start = hour_floor(group[0].occurred_at);
+            let total_isk: i64 = group.iter().map(|s| s.fleet_isk).sum();
+            let total_lp: i64 = group.iter().map(|s| s.fleet_lp).sum();
+            let sites_n = group.len() as u32;
+            let timed: Vec<i64> = group
+                .iter()
+                .filter(|s| s.counts_toward_avg)
+                .filter_map(|s| s.duration_seconds)
+                .collect();
+            let avg_site_seconds = if timed.is_empty() {
+                None
+            } else {
+                Some(timed.iter().sum::<i64>() as f64 / timed.len() as f64)
+            };
+            HourlyBucket {
+                hour_start,
+                total_isk,
+                total_lp,
+                sites: sites_n,
+                avg_site_seconds,
+            }
+        })
+        .collect();
+
+    let session = SessionSummary {
+        sites_ran,
+        active_site_seconds,
+        wallet_elapsed_seconds,
+        avg_site_seconds,
+        character_liquid_isk,
+        fleet_liquid_isk,
+        net_lp,
+        lp_per_character_total,
+        lp_value,
+        net_value,
+        liquid_isk_per_hour,
+        lp_value_per_hour,
+        net_per_hour,
+    };
+    (session, hourly)
+}
+
 /// Build timed site details + aggregates from sorted payout events.
 pub fn build_report(events: &[WalletPayout], settings: &RunSettings) -> AnalyticsReport {
     let break_secs = i64::from(settings.break_threshold_minutes) * 60;
-    let fleet_lp = settings.lp_per_char * i64::from(settings.fleet_size);
+    let fleet_size = settings.fleet_size.max(1);
+    let fleet_lp = settings.lp_per_char * i64::from(fleet_size);
 
     let mut sites: Vec<SiteDetail> = Vec::with_capacity(events.len());
     for (i, ev) in events.iter().enumerate() {
@@ -111,9 +219,11 @@ pub fn build_report(events: &[WalletPayout], settings: &RunSettings) -> Analytic
             )
         };
 
+        let fleet_isk = ev.amount_isk * i64::from(fleet_size);
         sites.push(SiteDetail {
             occurred_at: ev.occurred_at,
             amount_isk: ev.amount_isk,
+            fleet_isk,
             fleet_lp,
             gap_seconds,
             duration_seconds,
@@ -122,85 +232,12 @@ pub fn build_report(events: &[WalletPayout], settings: &RunSettings) -> Analytic
         });
     }
 
-    let sites_ran = sites.len() as u32;
-    let liquid_isk: i64 = sites.iter().map(|s| s.amount_isk).sum();
     let net_lp: i64 = sites.iter().map(|s| s.fleet_lp).sum();
-    let timed: Vec<i64> = sites
-        .iter()
-        .filter(|s| s.counts_toward_avg)
-        .filter_map(|s| s.duration_seconds)
-        .collect();
-    let time_spent_seconds: i64 = timed.iter().sum();
-    let avg_site_seconds = if timed.is_empty() {
-        None
-    } else {
-        Some(time_spent_seconds as f64 / timed.len() as f64)
-    };
-
-    let lp_value = net_lp as f64 * settings.isk_per_lp;
-    let net_value = liquid_isk as f64 + lp_value;
-    let hours = if time_spent_seconds > 0 {
-        time_spent_seconds as f64 / 3600.0
-    } else {
-        0.0
-    };
-    let (liquid_isk_per_hour, lp_value_per_hour, net_per_hour) = if hours > 0.0 {
-        (
-            liquid_isk as f64 / hours,
-            lp_value / hours,
-            net_value / hours,
-        )
-    } else {
-        (0.0, 0.0, 0.0)
-    };
-
-    // Hourly buckets
-    use std::collections::BTreeMap;
-    let mut buckets: BTreeMap<i64, Vec<&SiteDetail>> = BTreeMap::new();
-    for s in &sites {
-        let h = hour_floor(s.occurred_at);
-        buckets.entry(h.timestamp()).or_default().push(s);
-    }
-    let hourly: Vec<HourlyBucket> = buckets
-        .into_iter()
-        .map(|(_, group)| {
-            let hour_start = hour_floor(group[0].occurred_at);
-            let total_isk: i64 = group.iter().map(|s| s.amount_isk).sum();
-            let total_lp: i64 = group.iter().map(|s| s.fleet_lp).sum();
-            let sites_n = group.len() as u32;
-            let timed: Vec<i64> = group
-                .iter()
-                .filter(|s| s.counts_toward_avg)
-                .filter_map(|s| s.duration_seconds)
-                .collect();
-            let avg_site_seconds = if timed.is_empty() {
-                None
-            } else {
-                Some(timed.iter().sum::<i64>() as f64 / timed.len() as f64)
-            };
-            HourlyBucket {
-                hour_start,
-                total_isk,
-                total_lp,
-                sites: sites_n,
-                avg_site_seconds,
-            }
-        })
-        .collect();
+    let lp_per_character_total = Some(net_lp / i64::from(fleet_size));
+    let (session, hourly) = summarize_sites(&sites, settings.isk_per_lp, lp_per_character_total);
 
     AnalyticsReport {
-        session: SessionSummary {
-            sites_ran,
-            time_spent_seconds,
-            avg_site_seconds,
-            liquid_isk,
-            net_lp,
-            lp_value,
-            net_value,
-            liquid_isk_per_hour,
-            lp_value_per_hour,
-            net_per_hour,
-        },
+        session,
         hourly,
         sites,
     }
@@ -217,84 +254,28 @@ pub fn merge_reports(reports: &[AnalyticsReport], isk_per_lp: f64) -> AnalyticsR
     }
     all_sites.sort_by_key(|s| s.occurred_at);
 
-    // Rebuild summary from merged sites (hourly from merged)
-    let sites_ran = all_sites.len() as u32;
-    let liquid_isk: i64 = all_sites.iter().map(|s| s.amount_isk).sum();
-    let net_lp: i64 = all_sites.iter().map(|s| s.fleet_lp).sum();
-    let timed: Vec<i64> = all_sites
-        .iter()
-        .filter(|s| s.counts_toward_avg)
-        .filter_map(|s| s.duration_seconds)
-        .collect();
-    let time_spent_seconds: i64 = timed.iter().sum();
-    let avg_site_seconds = if timed.is_empty() {
-        None
-    } else {
-        Some(time_spent_seconds as f64 / timed.len() as f64)
-    };
-    let lp_value = net_lp as f64 * isk_per_lp;
-    let net_value = liquid_isk as f64 + lp_value;
-    let hours = if time_spent_seconds > 0 {
-        time_spent_seconds as f64 / 3600.0
-    } else {
-        0.0
-    };
-    let (liquid_isk_per_hour, lp_value_per_hour, net_per_hour) = if hours > 0.0 {
-        (
-            liquid_isk as f64 / hours,
-            lp_value / hours,
-            net_value / hours,
-        )
-    } else {
-        (0.0, 0.0, 0.0)
-    };
-
-    use std::collections::BTreeMap;
-    let mut buckets: BTreeMap<i64, Vec<&SiteDetail>> = BTreeMap::new();
-    for s in &all_sites {
-        let h = hour_floor(s.occurred_at);
-        buckets.entry(h.timestamp()).or_default().push(s);
-    }
-    let hourly: Vec<HourlyBucket> = buckets
-        .into_iter()
-        .map(|(_, group)| {
-            let hour_start = hour_floor(group[0].occurred_at);
-            let total_isk: i64 = group.iter().map(|s| s.amount_isk).sum();
-            let total_lp: i64 = group.iter().map(|s| s.fleet_lp).sum();
-            let sites_n = group.len() as u32;
-            let timed: Vec<i64> = group
-                .iter()
-                .filter(|s| s.counts_toward_avg)
-                .filter_map(|s| s.duration_seconds)
-                .collect();
-            let avg_site_seconds = if timed.is_empty() {
-                None
-            } else {
-                Some(timed.iter().sum::<i64>() as f64 / timed.len() as f64)
-            };
-            HourlyBucket {
-                hour_start,
-                total_isk,
-                total_lp,
-                sites: sites_n,
-                avg_site_seconds,
+    let lp_per_character_total = {
+        let mut sum = 0_i64;
+        let mut ok = true;
+        for r in reports {
+            match r.session.lp_per_character_total {
+                Some(v) => sum += v,
+                None => {
+                    ok = false;
+                    break;
+                }
             }
-        })
-        .collect();
+        }
+        if ok {
+            Some(sum)
+        } else {
+            None
+        }
+    };
 
+    let (session, hourly) = summarize_sites(&all_sites, isk_per_lp, lp_per_character_total);
     AnalyticsReport {
-        session: SessionSummary {
-            sites_ran,
-            time_spent_seconds,
-            avg_site_seconds,
-            liquid_isk,
-            net_lp,
-            lp_value,
-            net_value,
-            liquid_isk_per_hour,
-            lp_value_per_hour,
-            net_per_hour,
-        },
+        session,
         hourly,
         sites: all_sites,
     }
@@ -318,9 +299,9 @@ mod tests {
     fn gaps_and_break() {
         let events = vec![
             payout(2026, 7, 29, 23, 0),
-            payout(2026, 7, 29, 23, 6),  // 6 min
-            payout(2026, 7, 29, 23, 50), // 44 min break
-            payout(2026, 7, 29, 23, 56), // 6 min
+            payout(2026, 7, 29, 23, 6),
+            payout(2026, 7, 29, 23, 50),
+            payout(2026, 7, 29, 23, 56),
         ];
         let mut settings = RunSettings::default();
         settings.run_start = Some(Utc.with_ymd_and_hms(2026, 7, 29, 22, 54, 0).unwrap());
@@ -329,8 +310,7 @@ mod tests {
         assert_eq!(report.session.sites_ran, 4);
         assert!(report.sites[2].is_break);
         assert!(!report.sites[1].is_break);
-        // timed: first 6m + second 6m + fourth 6m = 18m (break excluded)
-        assert_eq!(report.session.time_spent_seconds, 6 * 60 * 3);
+        assert_eq!(report.session.active_site_seconds, 6 * 60 * 3);
     }
 
     #[test]
@@ -340,6 +320,28 @@ mod tests {
         let report = build_report(&events, &settings);
         assert!(!report.sites[0].counts_toward_avg);
         assert!(report.sites[1].counts_toward_avg);
-        assert_eq!(report.session.time_spent_seconds, 5 * 60);
+        assert_eq!(report.session.active_site_seconds, 5 * 60);
+        assert_eq!(report.session.wallet_elapsed_seconds, 5 * 60);
+    }
+
+    #[test]
+    fn fleet_liquid_scales_wallet_by_fleet_size() {
+        let events = vec![
+            payout(2026, 7, 29, 23, 0),
+            payout(2026, 7, 29, 23, 6),
+        ];
+        let mut settings = RunSettings::default();
+        settings.fleet_size = 15;
+        settings.run_start = Some(Utc.with_ymd_and_hms(2026, 7, 29, 22, 54, 0).unwrap());
+        let report = build_report(&events, &settings);
+
+        assert_eq!(report.session.character_liquid_isk, 30_000_000);
+        assert_eq!(report.session.fleet_liquid_isk, 450_000_000);
+        assert_eq!(report.sites[0].fleet_isk, 225_000_000);
+        assert_eq!(report.session.lp_per_character_total, Some(4_000));
+        // active: 6m + 6m = 12m → 0.2 hr; fleet liquid / hr = 450M / 0.2 = 2.25B
+        assert_eq!(report.session.active_site_seconds, 12 * 60);
+        assert!((report.session.liquid_isk_per_hour - 2_250_000_000.0).abs() < 1.0);
+        assert_eq!(report.hourly[0].total_isk, 450_000_000);
     }
 }

@@ -170,7 +170,7 @@ impl Db {
         .bind(manifest_text)
         .bind(report_json)
         .bind(report.session.sites_ran as i64)
-        .bind(report.session.liquid_isk)
+        .bind(report.session.fleet_liquid_isk)
         .execute(&self.pool)
         .await?;
         Ok(())

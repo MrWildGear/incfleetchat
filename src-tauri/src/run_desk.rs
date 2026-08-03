@@ -2,7 +2,6 @@
 
 use chrono::Utc;
 use parking_lot::Mutex;
-use std::sync::Arc;
 
 use crate::analytics_types::*;
 use crate::db::Db;

@@ -18,6 +18,7 @@ export type ReportScope =
 export type SiteDetail = {
   occurred_at: string;
   amount_isk: number;
+  fleet_isk: number;
   fleet_lp: number;
   gap_seconds: number | null;
   duration_seconds: number | null;
@@ -35,10 +36,13 @@ export type HourlyBucket = {
 
 export type SessionSummary = {
   sites_ran: number;
-  time_spent_seconds: number;
+  active_site_seconds: number;
+  wallet_elapsed_seconds: number;
   avg_site_seconds: number | null;
-  liquid_isk: number;
+  character_liquid_isk: number;
+  fleet_liquid_isk: number;
   net_lp: number;
+  lp_per_character_total: number | null;
   lp_value: number;
   net_value: number;
   liquid_isk_per_hour: number;
@@ -65,6 +69,7 @@ export type RunSummary = {
   constellation: string;
   saved_at: string;
   site_count: number;
+  /** Fleet liquid ISK for the run (DB column liquid_isk). */
   liquid_isk: number;
 };
 
