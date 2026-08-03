@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { computeAmmoLoad } from "../lib/ammo";
+import { formatCount, formatIskMoney, formatLp } from "../lib/formatAnalytics";
 import type {
   EditionFocus,
   EnrichmentSite,
@@ -27,12 +28,6 @@ function formatDuration(seconds: number | null | undefined): string {
   return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
-function formatIsk(n: number): string {
-  return new Intl.NumberFormat("en-US", {
-    maximumFractionDigits: 0,
-  }).format(n);
-}
-
 const defaultAmmo = {
   ammoStock: 1_000_000,
   launchers: 6,
@@ -49,6 +44,7 @@ export function ToolsApp() {
   const [walletPaste, setWalletPaste] = useState("");
   const [walletBuffer, setWalletBuffer] = useState("");
   const [showDrilldown, setShowDrilldown] = useState(false);
+  const [showListeners, setShowListeners] = useState(false);
   const [gamelogsPath, setGamelogsPath] = useState("");
   const [fcCharacter, setFcCharacter] = useState("");
   const [enriching, setEnriching] = useState(false);
@@ -313,13 +309,15 @@ export function ToolsApp() {
     for (const s of focus?.enrichment?.sites ?? []) map.set(s.occurred_at, s);
     return map;
   }, [focus?.enrichment]);
-  const enrichDiagnostics = useMemo(() => {
-    const fromEnrichment = focus?.enrichment?.diagnostics ?? [];
-    const fromFocus = (focus?.diagnostics ?? []).filter((d) =>
-      /enrich/i.test(d.message),
-    );
-    return [...fromEnrichment, ...fromFocus];
-  }, [focus?.enrichment?.diagnostics, focus?.diagnostics]);
+  /** Top Analytics strip diagnostics: everything in `focus.diagnostics` plus
+   * enrichment-only warnings (e.g. stale-schema, partial spawn coverage) that
+   * live on the enrichment snapshot itself. Rendered near Gamelogs/Re-enrich
+   * only — never duplicated into Summary. */
+  const topDiagnostics = useMemo(() => {
+    const generic = focus?.diagnostics ?? [];
+    const enrichmentOnly = focus?.enrichment?.diagnostics ?? [];
+    return [...generic, ...enrichmentOnly];
+  }, [focus?.diagnostics, focus?.enrichment?.diagnostics]);
 
   return (
     <div className="flex h-full flex-col bg-surface text-fg">
@@ -619,9 +617,9 @@ export function ToolsApp() {
             </div>
           </div>
 
-          {focus?.diagnostics?.length ? (
+          {topDiagnostics.length > 0 ? (
             <ul className="text-xs text-muted">
-              {focus.diagnostics.map((d, i) => (
+              {topDiagnostics.map((d, i) => (
                 <li key={i}>
                   [{d.level}] {d.message}
                 </li>
@@ -668,6 +666,19 @@ export function ToolsApp() {
               >
                 {showDrilldown ? "Hide site list" : "Per-site drill-down"}
               </button>
+              <button
+                type="button"
+                disabled={!focus?.enrichment?.missiles?.length}
+                onClick={() => setShowListeners((v) => !v)}
+                className={cn(
+                  "rounded border px-2 py-1 text-xs",
+                  focus?.enrichment?.missiles?.length
+                    ? "border-accent/40 text-accent hover:bg-accent/10"
+                    : "cursor-not-allowed border-border text-muted/40",
+                )}
+              >
+                {showListeners ? "Hide listeners" : "Listeners"}
+              </button>
             </div>
           </div>
 
@@ -689,9 +700,9 @@ export function ToolsApp() {
                       <td className="px-2 py-1">
                         {new Date(h.hour_start).toLocaleString()}
                       </td>
-                      <td className="px-2 py-1">{formatIsk(h.total_isk)}</td>
-                      <td className="px-2 py-1">{formatIsk(h.total_lp)}</td>
-                      <td className="px-2 py-1">{h.sites}</td>
+                      <td className="px-2 py-1">{formatIskMoney(h.total_isk)}</td>
+                      <td className="px-2 py-1">{formatLp(h.total_lp)}</td>
+                      <td className="px-2 py-1">{formatCount(h.sites)}</td>
                       <td className="px-2 py-1">
                         {formatDuration(h.avg_site_seconds)}
                       </td>
@@ -720,37 +731,37 @@ export function ToolsApp() {
                     label="Wallet elapsed"
                     value={formatDuration(session.wallet_elapsed_seconds)}
                   />
-                  <Row label="Sites ran" value={String(session.sites_ran)} />
+                  <Row label="Sites ran" value={formatCount(session.sites_ran)} />
                   <Row
                     label="Avg site time"
                     value={formatDuration(session.avg_site_seconds)}
                   />
                   <Row
                     label="Liquid ISK/hr"
-                    value={formatIsk(session.liquid_isk_per_hour)}
+                    value={formatIskMoney(session.liquid_isk_per_hour)}
                   />
                   <Row
                     label="LP value/hr"
-                    value={formatIsk(session.lp_value_per_hour)}
+                    value={formatIskMoney(session.lp_value_per_hour)}
                   />
-                  <Row label="Net/hr" value={formatIsk(session.net_per_hour)} />
-                  <Row label="Net LP" value={formatIsk(session.net_lp)} />
+                  <Row label="Net/hr" value={formatIskMoney(session.net_per_hour)} />
+                  <Row label="Net LP" value={formatLp(session.net_lp)} />
                   {session.lp_per_character_total != null && (
                     <Row
                       label="Per character LP"
-                      value={formatIsk(session.lp_per_character_total)}
+                      value={formatLp(session.lp_per_character_total)}
                     />
                   )}
-                  <Row label="ISK / LP" value={formatIsk(settings.isk_per_lp)} />
+                  <Row label="ISK / LP" value={formatIskMoney(settings.isk_per_lp)} />
                   <Row
                     label="Liquid Value"
-                    value={formatIsk(session.fleet_liquid_isk)}
+                    value={formatIskMoney(session.fleet_liquid_isk)}
                   />
-                  <Row label="LP value" value={formatIsk(session.lp_value)} />
-                  <Row label="Net value" value={formatIsk(session.net_value)} />
+                  <Row label="LP value" value={formatIskMoney(session.lp_value)} />
+                  <Row label="Net value" value={formatIskMoney(session.net_value)} />
                   <Row
                     label="Character liquid"
-                    value={formatIsk(session.character_liquid_isk)}
+                    value={formatIskMoney(session.character_liquid_isk)}
                   />
                 </>
               ) : (
@@ -778,58 +789,56 @@ export function ToolsApp() {
                   />
                   <Row
                     label="Dead missiles"
-                    value={String(focus.enrichment.totals.fleet_dead)}
+                    value={formatCount(focus.enrichment.totals.fleet_dead)}
                   />
                   <p className="text-[10px] text-muted">
                     Incomplete magazines can undercount dead missiles.
                   </p>
-                  {enrichDiagnostics.length > 0 && (
-                    <ul className="mt-1 space-y-0.5 text-[10px] text-muted">
-                      {enrichDiagnostics.map((d, i) => (
-                        <li key={i}>
-                          [{d.level}] {d.message}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
                 </>
-              )}
-              {!focus?.enrichment && enrichDiagnostics.length > 0 && (
-                <ul className="mt-1 space-y-0.5 text-[10px] text-muted">
-                  {enrichDiagnostics.map((d, i) => (
-                    <li key={i}>
-                      [{d.level}] {d.message}
-                    </li>
-                  ))}
-                </ul>
               )}
             </aside>
           </div>
 
-          {focus?.enrichment?.missiles?.length ? (
-            <div className="shrink-0 overflow-auto rounded border border-border">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-surface-raised text-muted">
-                  <tr>
-                    <th className="px-2 py-1">Listener</th>
-                    <th className="px-2 py-1">Reload cycles</th>
-                    <th className="px-2 py-1">Hits</th>
-                    <th className="px-2 py-1">Missiles/cycle</th>
-                    <th className="px-2 py-1">Dead</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {focus.enrichment.missiles.map((m) => (
-                    <tr key={m.listener} className="border-t border-border">
-                      <td className="px-2 py-1">{m.listener}</td>
-                      <td className="px-2 py-1">{m.reload_cycles}</td>
-                      <td className="px-2 py-1">{m.hits}</td>
-                      <td className="px-2 py-1">{m.missiles_per_cycle}</td>
-                      <td className="px-2 py-1">{m.dead}</td>
+          {showListeners && focus?.enrichment?.missiles?.length ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-border">
+              <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-b border-border bg-surface-raised px-3 py-2">
+                <h3 className="text-xs font-semibold">
+                  Listeners ({focus.enrichment.missiles.length})
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowListeners(false)}
+                  className="rounded border border-border px-2 py-1 text-xs hover:border-accent/40 hover:text-accent"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 z-10 bg-surface text-muted">
+                    <tr>
+                      <th className="px-2 py-1">Listener</th>
+                      <th className="px-2 py-1">Reload cycles</th>
+                      <th className="px-2 py-1">Hits</th>
+                      <th className="px-2 py-1">Missiles/cycle</th>
+                      <th className="px-2 py-1">Dead</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {focus.enrichment.missiles.map((m) => (
+                      <tr key={m.listener} className="border-t border-border">
+                        <td className="px-2 py-1">{m.listener}</td>
+                        <td className="px-2 py-1">{formatCount(m.reload_cycles)}</td>
+                        <td className="px-2 py-1">{formatCount(m.hits)}</td>
+                        <td className="px-2 py-1">
+                          {formatCount(m.missiles_per_cycle)}
+                        </td>
+                        <td className="px-2 py-1">{formatCount(m.dead)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           ) : null}
 
@@ -875,8 +884,8 @@ export function ToolsApp() {
                             {formatDuration(s.duration_seconds)}
                           </td>
                           <td className="px-2 py-1">{s.is_break ? "yes" : ""}</td>
-                          <td className="px-2 py-1">{formatIsk(s.amount_isk)}</td>
-                          <td className="px-2 py-1">{formatIsk(s.fleet_lp)}</td>
+                          <td className="px-2 py-1">{formatIskMoney(s.amount_isk)}</td>
+                          <td className="px-2 py-1">{formatLp(s.fleet_lp)}</td>
                           <td className="px-2 py-1">
                             {e ? formatDuration(e.warp_seconds) : "—"}
                           </td>
@@ -910,7 +919,10 @@ export function ToolsApp() {
             value={ammo.ammoPerLauncher}
             onChange={(n) => setAmmo({ ...ammo, ammoPerLauncher: n })}
           />
-          <Row label="Missiles per cycle" value={String(ammoResult.missilesPerCycle)} />
+          <Row
+            label="Missiles per cycle"
+            value={formatCount(ammoResult.missilesPerCycle)}
+          />
           <AmmoField
             label="Ship count"
             value={ammo.shipCount}
@@ -919,7 +931,9 @@ export function ToolsApp() {
           <div className="flex items-center justify-between rounded border border-border bg-surface-raised px-3 py-2">
             <div>
               <p className="text-xs text-muted">Load into ship</p>
-              <p className="text-lg font-semibold">{formatIsk(ammoResult.loadIntoShip)}</p>
+              <p className="text-lg font-semibold">
+                {formatCount(ammoResult.loadIntoShip)}
+              </p>
             </div>
             <button
               type="button"
