@@ -91,7 +91,7 @@ export type EnrichmentSource = "fc" | "borrowed" | "heuristic";
 export type EnrichmentSite = {
   occurred_at: string;
   warp_seconds: number;
-  in_site_seconds: number;
+  combat_to_payout_seconds: number | null;
   is_break: boolean;
   source: EnrichmentSource;
 };
@@ -106,8 +106,8 @@ export type MissileStat = {
 
 export type EnrichmentTotals = {
   warp_seconds: number;
-  in_site_seconds: number;
-  avg_in_site_seconds: number | null;
+  combat_to_payout_seconds: number | null;
+  avg_combat_to_payout_seconds: number | null;
   fleet_dead: number;
 };
 

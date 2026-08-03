@@ -1,4 +1,4 @@
-//! FC resolution, warp-vs-in-site alignment, and dead-missile math.
+//! FC resolution, warp-vs-combat→payout alignment, and dead-missile math.
 //!
 //! See docs/superpowers/specs/2026-08-02-gamelog-enrichment-v15-design.md
 //! ("Domain algorithms") for the authoritative rules this module implements.
@@ -86,14 +86,14 @@ struct WarpStart {
     source: EnrichmentSource,
 }
 
-/// Align a single payout gap into warp/in-site seconds.
+/// Align a single payout gap into warp seconds and combat→payout (Task 2).
 fn align_gap(
     logs: &[ListenerLog],
     resolved_fc: Option<&str>,
     gap_start: DateTime<Utc>,
     gap_end: DateTime<Utc>,
     break_threshold_minutes: u32,
-) -> (i64, i64, bool, EnrichmentSource) {
+) -> (i64, Option<i64>, bool, EnrichmentSource) {
     let fc_log = resolved_fc.and_then(|fc| logs.iter().find(|l| l.listener == fc));
 
     let fc_gap_events: Vec<&GamelogEvent> = fc_log
@@ -144,12 +144,10 @@ fn align_gap(
         let gap_seconds = (gap_end - gap_start).num_seconds().max(0);
         let break_secs = i64::from(break_threshold_minutes) * 60;
         let is_break = gap_seconds > break_secs;
-        let in_site = if is_break { 0 } else { gap_seconds };
-        return (0, in_site, is_break, EnrichmentSource::Heuristic);
+        return (0, None, is_break, EnrichmentSource::Heuristic);
     }
 
     let mut warp_seconds: i64 = 0;
-    let mut in_site_seconds: i64 = 0;
     let last_source = warp_starts.last().unwrap().source;
 
     for (idx, ws) in warp_starts.iter().enumerate() {
@@ -174,16 +172,9 @@ fn align_gap(
         let segment_end = *candidates.iter().min().unwrap();
 
         warp_seconds += (segment_end - ws.at).num_seconds().max(0);
-
-        // Intervening/tail in-site: from this segment's end to the next
-        // warp-start (or to the payout for the final segment).
-        let tail_end = next_warp_start.unwrap_or(gap_end);
-        if tail_end > segment_end {
-            in_site_seconds += (tail_end - segment_end).num_seconds();
-        }
     }
 
-    (warp_seconds, in_site_seconds, false, last_source)
+    (warp_seconds, None, false, last_source)
 }
 
 /// Copy of `logs` keeping only events inside the sealed run's window.
@@ -234,7 +225,7 @@ fn missile_stats(logs: &[ListenerLog], missiles_per_cycle: u32) -> Vec<MissileSt
         .collect()
 }
 
-/// Enrich a sealed run's wallet sites with gamelog-derived warp/in-site
+/// Enrich a sealed run's wallet sites with gamelog-derived warp/combat→payout
 /// splits and per-character dead-missile counts.
 pub fn enrich_run(
     logs: &[ListenerLog],
@@ -270,8 +261,8 @@ pub fn enrich_run(
     let resolved_fc = resolve_fc(logs, fc_character, wallet_fc_hint);
 
     let mut sites = Vec::with_capacity(site_times.len());
-    // (warp_seconds, in_site_seconds) for sites that count toward averages.
-    let mut counted: Vec<(i64, i64)> = Vec::new();
+    // (warp_seconds, combat_to_payout_seconds) for sites that count toward averages.
+    let mut counted: Vec<(i64, Option<i64>)> = Vec::new();
 
     for (i, &occurred_at) in site_times.iter().enumerate() {
         let gap_start = if i == 0 {
@@ -283,18 +274,18 @@ pub fn enrich_run(
         let Some(gap_start) = gap_start else {
             // v1 parity: first site with no run_start has no alignable open
             // bound. It still counts for ISK/LP upstream, but is excluded
-            // from warp/in-site averages here.
+            // from warp/combat→payout averages here.
             sites.push(EnrichmentSite {
                 occurred_at,
                 warp_seconds: 0,
-                in_site_seconds: 0,
+                combat_to_payout_seconds: None,
                 is_break: false,
                 source: EnrichmentSource::Heuristic,
             });
             continue;
         };
 
-        let (warp_seconds, in_site_seconds, is_break, source) = align_gap(
+        let (warp_seconds, combat_to_payout_seconds, is_break, source) = align_gap(
             logs,
             resolved_fc.as_deref(),
             gap_start,
@@ -303,13 +294,13 @@ pub fn enrich_run(
         );
 
         if !is_break {
-            counted.push((warp_seconds, in_site_seconds));
+            counted.push((warp_seconds, combat_to_payout_seconds));
         }
 
         sites.push(EnrichmentSite {
             occurred_at,
             warp_seconds,
-            in_site_seconds,
+            combat_to_payout_seconds,
             is_break,
             source,
         });
@@ -319,11 +310,19 @@ pub fn enrich_run(
     let fleet_dead: u32 = missiles.iter().map(|m| m.dead).sum();
 
     let total_warp: i64 = counted.iter().map(|(w, _)| w).sum();
-    let total_in_site: i64 = counted.iter().map(|(_, s)| s).sum();
-    let avg_in_site_seconds = if counted.is_empty() {
+    let combat_values: Vec<i64> = counted
+        .iter()
+        .filter_map(|(_, c)| *c)
+        .collect();
+    let total_combat: Option<i64> = if combat_values.is_empty() {
         None
     } else {
-        Some(total_in_site as f64 / counted.len() as f64)
+        Some(combat_values.iter().sum())
+    };
+    let avg_combat_to_payout_seconds = if combat_values.is_empty() {
+        None
+    } else {
+        Some(combat_values.iter().sum::<i64>() as f64 / combat_values.len() as f64)
     };
 
     EnrichmentSnapshot {
@@ -334,8 +333,8 @@ pub fn enrich_run(
         missiles,
         totals: EnrichmentTotals {
             warp_seconds: total_warp,
-            in_site_seconds: total_in_site,
-            avg_in_site_seconds,
+            combat_to_payout_seconds: total_combat,
+            avg_combat_to_payout_seconds,
             fleet_dead,
         },
     }
@@ -395,7 +394,7 @@ mod tests {
         assert_eq!(snap.sites.len(), 2);
         let site = &snap.sites[1];
         assert_eq!(site.warp_seconds, 130);
-        assert_eq!(site.in_site_seconds, 330);
+        assert_eq!(site.combat_to_payout_seconds, Some(330));
         assert_eq!(site.source, EnrichmentSource::Borrowed);
         assert!(!site.is_break);
     }
@@ -411,7 +410,7 @@ mod tests {
         let site = &snap.sites[1];
         assert!(site.is_break);
         assert_eq!(site.warp_seconds, 0);
-        assert_eq!(site.in_site_seconds, 0);
+        assert_eq!(site.combat_to_payout_seconds, None);
         assert_eq!(site.source, EnrichmentSource::Heuristic);
     }
 
@@ -426,7 +425,7 @@ mod tests {
         let site = &snap.sites[1];
         assert!(!site.is_break);
         assert_eq!(site.warp_seconds, 0);
-        assert_eq!(site.in_site_seconds, 600);
+        assert_eq!(site.combat_to_payout_seconds, Some(600));
         assert_eq!(site.source, EnrichmentSource::Heuristic);
     }
 
@@ -472,17 +471,17 @@ mod tests {
 
         let first = &snap.sites[0];
         assert_eq!(first.warp_seconds, 0);
-        assert_eq!(first.in_site_seconds, 0);
+        assert_eq!(first.combat_to_payout_seconds, None);
         assert!(!first.is_break);
 
         let second = &snap.sites[1];
         assert_eq!(second.warp_seconds, 120);
-        assert_eq!(second.in_site_seconds, 480);
+        assert_eq!(second.combat_to_payout_seconds, Some(480));
 
         // Averages must only reflect the second (alignable) site.
-        assert_eq!(snap.totals.avg_in_site_seconds, Some(480.0));
+        assert_eq!(snap.totals.avg_combat_to_payout_seconds, Some(480.0));
         assert_eq!(snap.totals.warp_seconds, 120);
-        assert_eq!(snap.totals.in_site_seconds, 480);
+        assert_eq!(snap.totals.combat_to_payout_seconds, Some(480));
     }
 
     /// Events from earlier/later sessions in the same gamelog file must not
@@ -546,7 +545,7 @@ mod tests {
         // Warp legs: 20:01→20:02 (60s) and 20:05→20:06:30 (90s).
         assert_eq!(site.warp_seconds, 150);
         // In-site: 20:02→20:05 (180s) plus 20:06:30→payout (90s).
-        assert_eq!(site.in_site_seconds, 270);
+        assert_eq!(site.combat_to_payout_seconds, Some(270));
         assert_eq!(site.source, EnrichmentSource::Fc);
         assert!(!site.is_break);
     }
@@ -570,7 +569,7 @@ mod tests {
         let site = &snap.sites[1];
         assert!(!site.is_break);
         assert_eq!(site.warp_seconds, 180);
-        assert_eq!(site.in_site_seconds, 32 * 60);
+        assert_eq!(site.combat_to_payout_seconds, Some(32 * 60));
     }
 
     #[test]

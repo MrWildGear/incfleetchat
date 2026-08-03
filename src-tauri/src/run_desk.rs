@@ -617,7 +617,7 @@ Immensea
         assert_eq!(enrichment.sites.len(), 2);
         assert_eq!(enrichment.sites[1].source, EnrichmentSource::Fc);
         assert_eq!(enrichment.sites[1].warp_seconds, 90);
-        assert_eq!(enrichment.sites[1].in_site_seconds, 180);
+        assert_eq!(enrichment.sites[1].combat_to_payout_seconds, Some(180));
 
         // Files the scan had to skip are reported on the snapshot.
         assert!(

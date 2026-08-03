@@ -769,12 +769,12 @@ export function ToolsApp() {
                     value={formatDuration(focus.enrichment.totals.warp_seconds)}
                   />
                   <Row
-                    label="In-site time"
-                    value={formatDuration(focus.enrichment.totals.in_site_seconds)}
+                    label="Combat→payout"
+                    value={formatDuration(focus.enrichment.totals.combat_to_payout_seconds)}
                   />
                   <Row
-                    label="Avg in-site"
-                    value={formatDuration(focus.enrichment.totals.avg_in_site_seconds)}
+                    label="Avg combat→payout"
+                    value={formatDuration(focus.enrichment.totals.avg_combat_to_payout_seconds)}
                   />
                   <Row
                     label="Dead missiles"
@@ -858,7 +858,7 @@ export function ToolsApp() {
                       <th className="px-2 py-1">ISK</th>
                       <th className="px-2 py-1">LP</th>
                       <th className="px-2 py-1">Warp</th>
-                      <th className="px-2 py-1">In-site</th>
+                      <th className="px-2 py-1">Combat→payout</th>
                       <th className="px-2 py-1">Source</th>
                     </tr>
                   </thead>
@@ -881,7 +881,7 @@ export function ToolsApp() {
                             {e ? formatDuration(e.warp_seconds) : "—"}
                           </td>
                           <td className="px-2 py-1">
-                            {e ? formatDuration(e.in_site_seconds) : "—"}
+                            {e ? formatDuration(e.combat_to_payout_seconds) : "—"}
                           </td>
                           <td className="px-2 py-1">{e ? e.source : "—"}</td>
                         </tr>

@@ -87,7 +87,7 @@ pub struct Catalog {
     pub runs: Vec<RunSummary>,
 }
 
-/// Where a site row's warp/in-site split came from.
+/// Where a site row's warp/combat→payout split came from.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EnrichmentSource {
@@ -100,7 +100,7 @@ pub enum EnrichmentSource {
 pub struct EnrichmentSite {
     pub occurred_at: DateTime<Utc>,
     pub warp_seconds: i64,
-    pub in_site_seconds: i64,
+    pub combat_to_payout_seconds: Option<i64>,
     pub is_break: bool,
     pub source: EnrichmentSource,
 }
@@ -117,8 +117,8 @@ pub struct MissileStat {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EnrichmentTotals {
     pub warp_seconds: i64,
-    pub in_site_seconds: i64,
-    pub avg_in_site_seconds: Option<f64>,
+    pub combat_to_payout_seconds: Option<i64>,
+    pub avg_combat_to_payout_seconds: Option<f64>,
     pub fleet_dead: u32,
 }
 

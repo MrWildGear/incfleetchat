@@ -614,7 +614,7 @@ mod tests {
             sites: vec![EnrichmentSite {
                 occurred_at: Utc::now(),
                 warp_seconds: 10,
-                in_site_seconds: 20,
+                combat_to_payout_seconds: Some(20),
                 is_break: false,
                 source: EnrichmentSource::Fc,
             }],
@@ -627,8 +627,8 @@ mod tests {
             }],
             totals: EnrichmentTotals {
                 warp_seconds: 10,
-                in_site_seconds: 20,
-                avg_in_site_seconds: Some(20.0),
+                combat_to_payout_seconds: Some(20),
+                avg_combat_to_payout_seconds: Some(20.0),
                 fleet_dead: 151,
             },
         };
