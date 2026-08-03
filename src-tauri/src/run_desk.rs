@@ -953,7 +953,7 @@ Immensea
             .expect("enrichment should be attached to focus right after analyze");
         assert_eq!(enrichment.resolved_fc.as_deref(), Some("FC Pilot"));
         assert_eq!(enrichment.sites.len(), 2);
-        assert_eq!(enrichment.sites[1].source, EnrichmentSource::Fc);
+        assert_eq!(enrichment.sites[1].source, EnrichmentSource::Fleet);
         assert_eq!(enrichment.sites[1].warp_seconds, 90);
         assert_eq!(enrichment.sites[1].combat_to_payout_seconds, Some(180));
 

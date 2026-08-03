@@ -22,10 +22,37 @@ fn is_end_marker(kind: GamelogEventKind) -> bool {
 }
 
 /// Events that count as "combat" for the combat→payout clock. Unlike
-/// `is_end_marker`, `Regrouping` does not count: only an actual combat
-/// signal starts the payout countdown.
+/// `is_end_marker`, neither `Regrouping` nor incoming `CombatAny` count:
+/// only an actual outgoing hit (`CombatHit`) starts the payout countdown.
 fn is_combat_kind(kind: GamelogEventKind) -> bool {
-    matches!(kind, GamelogEventKind::CombatHit | GamelogEventKind::CombatAny)
+    matches!(kind, GamelogEventKind::CombatHit)
+}
+
+/// Minimum gap between two `FollowingWarp` events for both to count as
+/// distinct warp-start signals. Warps within this window of an already
+/// accepted start are treated as the same fleet jump (e.g. two listeners
+/// warping together) and debounced away.
+const WARP_START_DEBOUNCE_SECS: i64 = 10;
+
+/// Sort `segments` by start and merge any whose start falls at or before the
+/// current merged segment's end.
+fn coalesce_intervals(
+    mut segments: Vec<(DateTime<Utc>, DateTime<Utc>)>,
+) -> Vec<(DateTime<Utc>, DateTime<Utc>)> {
+    segments.sort_by_key(|(start, _)| *start);
+    let mut merged: Vec<(DateTime<Utc>, DateTime<Utc>)> = Vec::new();
+    for (start, end) in segments {
+        if let Some(last) = merged.last_mut() {
+            if start <= last.1 {
+                if end > last.1 {
+                    last.1 = end;
+                }
+                continue;
+            }
+        }
+        merged.push((start, end));
+    }
+    merged
 }
 
 /// Resolve the fleet commander's Listener name.
@@ -88,19 +115,14 @@ fn earliest_after<'a>(
         .copied()
 }
 
-struct WarpStart {
-    at: DateTime<Utc>,
-    source: EnrichmentSource,
-}
-
-/// First FC-log combat event (`CombatHit` or `CombatAny`) with
+/// First `CombatHit` across the fleet's pooled events with
 /// `clear_start <= occurred_at < gap_end`, converted to seconds-until-payout.
 fn combat_to_payout(
-    fc_gap_events: &[&GamelogEvent],
+    fleet_gap_events: &[&GamelogEvent],
     clear_start: DateTime<Utc>,
     gap_end: DateTime<Utc>,
 ) -> Option<i64> {
-    fc_gap_events
+    fleet_gap_events
         .iter()
         .filter(|e| is_combat_kind(e.kind) && e.occurred_at >= clear_start && e.occurred_at < gap_end)
         .min_by_key(|e| e.occurred_at)
@@ -108,21 +130,25 @@ fn combat_to_payout(
 }
 
 /// Align a single payout gap into warp seconds and combat→payout (Task 2).
+///
+/// `resolved_fc` is still computed by the caller for the Summary display but
+/// is not consulted here: warp-start and combat signals are fused across the
+/// whole fleet's listeners (see the module doc's fleet-timing design).
 fn align_gap(
     logs: &[ListenerLog],
-    resolved_fc: Option<&str>,
+    _resolved_fc: Option<&str>,
     gap_start: DateTime<Utc>,
     gap_end: DateTime<Utc>,
     break_threshold_minutes: u32,
 ) -> (i64, Option<i64>, bool, EnrichmentSource) {
-    let fc_log = resolved_fc.and_then(|fc| logs.iter().find(|l| l.listener == fc));
+    // Flat pool of every listener's events in the gap.
+    let all_gap_events: Vec<&GamelogEvent> = logs
+        .iter()
+        .flat_map(|l| events_in_gap(l, gap_start, gap_end))
+        .collect();
 
-    let fc_gap_events: Vec<&GamelogEvent> = fc_log
-        .map(|l| events_in_gap(l, gap_start, gap_end))
-        .unwrap_or_default();
-
-    let fc_warp_starts: Vec<DateTime<Utc>> = {
-        let mut v: Vec<DateTime<Utc>> = fc_gap_events
+    let raw_starts: Vec<DateTime<Utc>> = {
+        let mut v: Vec<DateTime<Utc>> = all_gap_events
             .iter()
             .filter(|e| e.kind == GamelogEventKind::FollowingWarp)
             .map(|e| e.occurred_at)
@@ -131,80 +157,59 @@ fn align_gap(
         v
     };
 
-    // Flat pool of every listener's events in the gap (used for borrowing and
-    // for the "any listener" end-marker fallback).
-    let all_gap_events: Vec<&GamelogEvent> = logs
-        .iter()
-        .flat_map(|l| events_in_gap(l, gap_start, gap_end))
-        .collect();
-
-    let warp_starts: Vec<WarpStart> = if !fc_warp_starts.is_empty() {
-        fc_warp_starts
-            .into_iter()
-            .map(|at| WarpStart {
-                at,
-                source: EnrichmentSource::Fc,
-            })
-            .collect()
-    } else {
-        let borrowed = all_gap_events
-            .iter()
-            .filter(|e| e.kind == GamelogEventKind::FollowingWarp)
-            .min_by_key(|e| e.occurred_at)
-            .map(|e| e.occurred_at);
-        match borrowed {
-            Some(at) => vec![WarpStart {
-                at,
-                source: EnrichmentSource::Borrowed,
-            }],
-            None => Vec::new(),
+    // Debounce warp-starts within WARP_START_DEBOUNCE_SECS of the last
+    // accepted start: multiple listeners following the same jump must not
+    // each start a new warp segment.
+    let mut accepted_starts: Vec<DateTime<Utc>> = Vec::new();
+    for s in raw_starts {
+        let debounced = accepted_starts
+            .last()
+            .is_some_and(|&last| (s - last).num_seconds() < WARP_START_DEBOUNCE_SECS);
+        if !debounced {
+            accepted_starts.push(s);
         }
-    };
+    }
 
-    if warp_starts.is_empty() {
+    if accepted_starts.is_empty() {
         let gap_seconds = (gap_end - gap_start).num_seconds().max(0);
         let break_secs = i64::from(break_threshold_minutes) * 60;
         if gap_seconds > break_secs {
             return (0, None, true, EnrichmentSource::Heuristic);
         }
         let clear_start = gap_start;
-        let combat = combat_to_payout(&fc_gap_events, clear_start, gap_end);
+        let combat = combat_to_payout(&all_gap_events, clear_start, gap_end);
         return (0, combat, false, EnrichmentSource::Heuristic);
     }
 
-    let mut warp_seconds: i64 = 0;
-    let mut last_segment_end = gap_start;
-    let last_source = warp_starts.last().unwrap().source;
+    let segments: Vec<(DateTime<Utc>, DateTime<Utc>)> = accepted_starts
+        .iter()
+        .enumerate()
+        .map(|(idx, &start)| {
+            let next_start = accepted_starts.get(idx + 1).copied();
+            let marker = earliest_after(&all_gap_events, start, is_end_marker).map(|e| e.occurred_at);
 
-    for (idx, ws) in warp_starts.iter().enumerate() {
-        let next_warp_start = warp_starts.get(idx + 1).map(|w| w.at);
+            let mut candidates: Vec<DateTime<Utc>> = vec![gap_end];
+            if let Some(m) = marker {
+                candidates.push(m);
+            }
+            if let Some(ns) = next_start {
+                candidates.push(ns);
+            }
+            let end = *candidates.iter().min().unwrap();
+            (start, end)
+        })
+        .collect();
 
-        // Prefer FC's own regroup/combat_any after this warp-start; fall back
-        // to any listener's only when FC has none anywhere later in the gap.
-        let fc_marker = earliest_after(&fc_gap_events, ws.at, is_end_marker).map(|e| e.occurred_at);
-        let marker = if fc_marker.is_some() {
-            fc_marker
-        } else {
-            earliest_after(&all_gap_events, ws.at, is_end_marker).map(|e| e.occurred_at)
-        };
+    let coalesced = coalesce_intervals(segments);
+    let warp_seconds: i64 = coalesced
+        .iter()
+        .map(|(start, end)| (*end - *start).num_seconds().max(0))
+        .sum();
+    let clear_start = coalesced.last().map(|(_, end)| *end).unwrap_or(gap_start);
 
-        let mut candidates: Vec<DateTime<Utc>> = vec![gap_end];
-        if let Some(m) = marker {
-            candidates.push(m);
-        }
-        if let Some(nws) = next_warp_start {
-            candidates.push(nws);
-        }
-        let segment_end = *candidates.iter().min().unwrap();
+    let combat = combat_to_payout(&all_gap_events, clear_start, gap_end);
 
-        warp_seconds += (segment_end - ws.at).num_seconds().max(0);
-        last_segment_end = segment_end;
-    }
-
-    let clear_start = last_segment_end;
-    let combat = combat_to_payout(&fc_gap_events, clear_start, gap_end);
-
-    (warp_seconds, combat, false, last_source)
+    (warp_seconds, combat, false, EnrichmentSource::Fleet)
 }
 
 /// Copy of `logs` keeping only events inside the sealed run's window.
@@ -395,10 +400,11 @@ mod tests {
         }
     }
 
-    /// Worked example from the spec: borrowed warp-start (Alt), FC's first
-    /// combat ends the warp → warp 130s, in-site 330s, source borrowed.
+    /// Worked example from the spec: a non-FC listener's warp-start (Alt),
+    /// the FC's first combat ends the warp → warp 130s, in-site 330s, fused
+    /// across the fleet's pooled events.
     #[test]
-    fn worked_example_borrowed_warp_130_330() {
+    fn worked_example_fleet_warp_130_330() {
         let fc = listener_log(
             "FC Pilot",
             vec![ev(20, 2, 30, GamelogEventKind::CombatHit)],
@@ -425,7 +431,7 @@ mod tests {
         let site = &snap.sites[1];
         assert_eq!(site.warp_seconds, 130);
         assert_eq!(site.combat_to_payout_seconds, Some(330));
-        assert_eq!(site.source, EnrichmentSource::Borrowed);
+        assert_eq!(site.source, EnrichmentSource::Fleet);
         assert!(!site.is_break);
     }
 
@@ -459,12 +465,12 @@ mod tests {
         assert_eq!(site.source, EnrichmentSource::Heuristic);
     }
 
-    /// No warp markers in the gap, but the FC log has a combat line: combat
-    /// is measured from `gap_start` (the heuristic `clear_start`) using the
-    /// FC log only.
+    /// No warp markers in the gap, but a listener log has a `CombatHit`:
+    /// combat is measured from `gap_start` (the heuristic `clear_start`)
+    /// using the pooled fleet events.
     #[test]
-    fn no_markers_short_gap_combat_from_fc_log_only() {
-        let fc = listener_log("FC Pilot", vec![ev(20, 6, 0, GamelogEventKind::CombatAny)]);
+    fn no_markers_short_gap_combat_from_log_only() {
+        let fc = listener_log("FC Pilot", vec![ev(20, 6, 0, GamelogEventKind::CombatHit)]);
         let logs = vec![fc];
         let sites = vec![ts(20, 0, 0), ts(20, 10, 0)];
 
@@ -509,7 +515,7 @@ mod tests {
             "FC Pilot",
             vec![
                 ev(20, 10, 0, GamelogEventKind::FollowingWarp),
-                ev(20, 12, 0, GamelogEventKind::CombatAny),
+                ev(20, 12, 0, GamelogEventKind::CombatHit),
             ],
         );
         let logs = vec![fc];
@@ -595,7 +601,7 @@ mod tests {
         // clear_start = end of last warp segment (20:06:30); the CombatHit
         // that ended that segment is itself the first combat → payout 90s.
         assert_eq!(site.combat_to_payout_seconds, Some(90));
-        assert_eq!(site.source, EnrichmentSource::Fc);
+        assert_eq!(site.source, EnrichmentSource::Fleet);
         assert!(!site.is_break);
     }
 
@@ -630,7 +636,7 @@ mod tests {
             "FC Pilot",
             vec![
                 ev(20, 2, 30, GamelogEventKind::Regrouping),
-                ev(20, 3, 0, GamelogEventKind::CombatAny),
+                ev(20, 3, 0, GamelogEventKind::CombatHit),
             ],
         );
         let alt = listener_log(
@@ -653,7 +659,7 @@ mod tests {
         let site = &snap.sites[1];
         assert_eq!(site.warp_seconds, 130);
         assert_eq!(site.combat_to_payout_seconds, Some(300));
-        assert_eq!(site.source, EnrichmentSource::Borrowed);
+        assert_eq!(site.source, EnrichmentSource::Fleet);
         assert!(!site.is_break);
     }
 
@@ -707,6 +713,121 @@ mod tests {
         assert_eq!(first.warp_seconds, 0);
         assert_eq!(first.combat_to_payout_seconds, None);
         assert!(!first.is_break);
+    }
+
+    #[test]
+    fn fleet_same_jump_two_listeners_counts_one_warp() {
+        // Both warp at 20:00:20; FC lands via Regrouping 20:02:30; Alt CombatHit 20:03:00; payout 20:08:00
+        // Prev site 20:00:00. Warp = 130s (not 260). Source Fleet. Combat→payout from Alt hit = 300s.
+        let fc = listener_log(
+            "FC Pilot",
+            vec![
+                ev(20, 0, 20, GamelogEventKind::FollowingWarp),
+                ev(20, 2, 30, GamelogEventKind::Regrouping),
+            ],
+        );
+        let alt = listener_log(
+            "Alt Pilot",
+            vec![
+                ev(20, 0, 21, GamelogEventKind::FollowingWarp), // within 10s → debounce
+                ev(20, 3, 0, GamelogEventKind::CombatHit),
+            ],
+        );
+        let snap = enrich_run(
+            &[fc, alt],
+            &[ts(20, 0, 0), ts(20, 8, 0)],
+            25,
+            Some(ts(19, 55, 0)),
+            156,
+            Some("FC Pilot"),
+            None,
+        );
+        let site = &snap.sites[1];
+        assert_eq!(site.warp_seconds, 130);
+        assert_eq!(site.combat_to_payout_seconds, Some(300));
+        assert_eq!(site.source, EnrichmentSource::Fleet);
+    }
+
+    #[test]
+    fn combat_any_does_not_start_combat_to_payout() {
+        let fc = listener_log(
+            "FC Pilot",
+            vec![
+                ev(20, 1, 0, GamelogEventKind::FollowingWarp),
+                ev(20, 2, 0, GamelogEventKind::Regrouping),
+                ev(20, 2, 30, GamelogEventKind::CombatAny), // incoming — must NOT start clock
+            ],
+        );
+        let snap = enrich_run(
+            &[fc],
+            &[ts(20, 0, 0), ts(20, 8, 0)],
+            25,
+            Some(ts(19, 55, 0)),
+            156,
+            Some("FC Pilot"),
+            None,
+        );
+        let site = &snap.sites[1];
+        assert_eq!(site.warp_seconds, 60);
+        assert_eq!(site.combat_to_payout_seconds, None);
+        assert_eq!(site.source, EnrichmentSource::Fleet);
+    }
+
+    #[test]
+    fn combat_from_non_fc_hit_when_fc_quiet() {
+        let fc = listener_log(
+            "FC Pilot",
+            vec![
+                ev(20, 1, 0, GamelogEventKind::FollowingWarp),
+                ev(20, 2, 0, GamelogEventKind::Regrouping),
+            ],
+        );
+        let alt = listener_log(
+            "Alt Pilot",
+            vec![ev(20, 3, 0, GamelogEventKind::CombatHit)],
+        );
+        let snap = enrich_run(
+            &[fc, alt],
+            &[ts(20, 0, 0), ts(20, 8, 0)],
+            25,
+            Some(ts(19, 55, 0)),
+            156,
+            Some("FC Pilot"),
+            None,
+        );
+        let site = &snap.sites[1];
+        assert_eq!(site.warp_seconds, 60);
+        assert_eq!(site.combat_to_payout_seconds, Some(300));
+        assert_eq!(site.source, EnrichmentSource::Fleet);
+    }
+
+    #[test]
+    fn warp_start_outside_debounce_is_second_segment() {
+        // Accepted starts 20:01:00 and 20:01:15 (≥10s) — two segments if each ends before the next
+        let fc = listener_log(
+            "FC Pilot",
+            vec![
+                ev(20, 1, 0, GamelogEventKind::FollowingWarp),
+                ev(20, 1, 5, GamelogEventKind::Regrouping),
+                ev(20, 1, 15, GamelogEventKind::FollowingWarp),
+                ev(20, 1, 40, GamelogEventKind::Regrouping),
+                ev(20, 2, 0, GamelogEventKind::CombatHit),
+            ],
+        );
+        let snap = enrich_run(
+            &[fc],
+            &[ts(20, 0, 0), ts(20, 5, 0)],
+            25,
+            Some(ts(19, 55, 0)),
+            156,
+            Some("FC Pilot"),
+            None,
+        );
+        let site = &snap.sites[1];
+        // 5s + 25s = 30s warp
+        assert_eq!(site.warp_seconds, 30);
+        assert_eq!(site.combat_to_payout_seconds, Some(180)); // 20:05 - 20:02
+        assert_eq!(site.source, EnrichmentSource::Fleet);
     }
 
     #[test]
