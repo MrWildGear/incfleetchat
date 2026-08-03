@@ -51,6 +51,7 @@ export function ToolsApp() {
   const [showDrilldown, setShowDrilldown] = useState(false);
   const [gamelogsPath, setGamelogsPath] = useState("");
   const [fcCharacter, setFcCharacter] = useState("");
+  const [enriching, setEnriching] = useState(false);
   const walletRef = useRef<HTMLTextAreaElement>(null);
 
   const [settings, setSettings] = useState<RunSettings>({
@@ -104,6 +105,7 @@ export function ToolsApp() {
       });
     } catch (e) {
       setError(String(e));
+      throw e;
     }
   }
 
@@ -118,6 +120,7 @@ export function ToolsApp() {
 
   async function reenrich() {
     try {
+      setEnriching(true);
       await persistToolsSettings();
       await syncAmmoSettings();
       const runId = focus?.scope.kind === "run" ? focus.scope.run_id : undefined;
@@ -125,6 +128,8 @@ export function ToolsApp() {
       applyFocus(f);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setEnriching(false);
     }
   }
 
@@ -187,12 +192,15 @@ export function ToolsApp() {
 
   async function analyze() {
     try {
+      setEnriching(true);
       await syncSettings(settings);
       await syncAmmoSettings();
       const f = await invoke<EditionFocus>("run_desk_analyze");
       applyFocus(f);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setEnriching(false);
     }
   }
 
@@ -210,11 +218,20 @@ export function ToolsApp() {
   }
 
   const session = focus?.report?.session;
+  const canReenrich =
+    focus?.scope.kind === "run" || Boolean(focus?.enrichment);
   const enrichmentByTime = useMemo(() => {
     const map = new Map<string, EnrichmentSite>();
     for (const s of focus?.enrichment?.sites ?? []) map.set(s.occurred_at, s);
     return map;
   }, [focus?.enrichment]);
+  const enrichDiagnostics = useMemo(() => {
+    const fromEnrichment = focus?.enrichment?.diagnostics ?? [];
+    const fromFocus = (focus?.diagnostics ?? []).filter((d) =>
+      /enrich/i.test(d.message),
+    );
+    return [...fromEnrichment, ...fromFocus];
+  }, [focus?.enrichment?.diagnostics, focus?.diagnostics]);
 
   return (
     <div className="flex h-full flex-col bg-surface text-fg">
@@ -516,12 +533,27 @@ export function ToolsApp() {
           ) : null}
 
           <div className="flex shrink-0 items-center justify-between gap-2">
-            <h2 className="text-xs font-semibold text-muted">Results</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xs font-semibold text-muted">Results</h2>
+              {enriching ? (
+                <span className="text-xs text-accent">Enriching…</span>
+              ) : focus?.enrichment ? (
+                <span className="text-xs text-muted">
+                  Enriched {focus.enrichment.listeners.length} listeners
+                </span>
+              ) : null}
+            </div>
             <div className="flex gap-2">
               <button
                 type="button"
+                disabled={!canReenrich || enriching}
                 onClick={() => void reenrich()}
-                className="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent hover:bg-accent/20"
+                className={cn(
+                  "rounded border px-2 py-1 text-xs",
+                  canReenrich && !enriching
+                    ? "border-accent/40 bg-accent/10 text-accent hover:bg-accent/20"
+                    : "cursor-not-allowed border-border text-muted/40",
+                )}
                 title="Recompute warp/in-site and dead missiles from gamelogs"
               >
                 Re-enrich
@@ -651,7 +683,28 @@ export function ToolsApp() {
                     label="Dead missiles"
                     value={String(focus.enrichment.totals.fleet_dead)}
                   />
+                  <p className="text-[10px] text-muted">
+                    Incomplete magazines can undercount dead missiles.
+                  </p>
+                  {enrichDiagnostics.length > 0 && (
+                    <ul className="mt-1 space-y-0.5 text-[10px] text-muted">
+                      {enrichDiagnostics.map((d, i) => (
+                        <li key={i}>
+                          [{d.level}] {d.message}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </>
+              )}
+              {!focus?.enrichment && enrichDiagnostics.length > 0 && (
+                <ul className="mt-1 space-y-0.5 text-[10px] text-muted">
+                  {enrichDiagnostics.map((d, i) => (
+                    <li key={i}>
+                      [{d.level}] {d.message}
+                    </li>
+                  ))}
+                </ul>
               )}
             </aside>
           </div>
