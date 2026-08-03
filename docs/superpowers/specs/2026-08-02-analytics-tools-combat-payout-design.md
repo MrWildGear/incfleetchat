@@ -40,6 +40,8 @@ v1.5 enrichment surfaces **in-site** as “gap minus warp,” which mixes clear 
 | Diagnostics placement | Top Analytics strip near Gamelogs/Re-enrich — not Summary |
 | Number format | ISK/liquid `$#,###`; counts `#,###`; LP no `$` |
 | Approach | Replace in-site in enrichment model + aggregate in RunDesk |
+| Spawn enrichment vs v1.5 | EnrichmentSnapshot aggregate is enrichment-only; **no** wallet-gap fill for missing runs (wallet report unchanged) |
+| Stale in-site JSON | Needs Re-enrich; omit from aggregate / null focus enrichment |
 
 ## Architecture
 
@@ -98,22 +100,25 @@ Remove `in_site_seconds` / `avg_in_site_seconds` from the public snapshot.
 
 ### Combat→payout rule
 
-On the same timing event stream used for warp (FC, with borrowed warp-starts when needed):
+Use the **same fused timing stream** already used for warp termination: FC listener events, with **borrowed** `Following in warp` from other listeners when the FC has none in the gap. Combat for this clock is read from that fused stream (FC’s own combat lines on the FC log — not per-Listener missile rows, and not “earliest combat across the whole fleet”).
 
 1. If site is **break** or **first site** with no leading gap clocks (v1.5 rule): `combat_to_payout_seconds = null`.
 2. Else determine `clear_start`:
    - If warp markers exist in the gap: end of the last warp segment in that gap.
    - Else (heuristic non-break gap with no markers): gap start.
-3. First **combat** event (`CombatHit` or `CombatAny`) with `occurred_at >= clear_start` and `< payout`.
+3. First **combat** event (`CombatHit` or `CombatAny`) on the fused timing log with `occurred_at >= clear_start` and `< payout`.
 4. If none: `null`. Else: `(payout - first_combat).num_seconds().max(0)`.
 
 ### Spawn / Overall aggregation (RunDesk)
 
+**Supersedes v1.5 for `EditionFocus.enrichment` only:** Enrichment Summary clocks (warp, combat→payout, dead missiles) on Spawn/Overall are built **only** from runs that have a readable post-this-spec enrichment snapshot. Do **not** fill missing enrichment with wallet gap timing inside `EnrichmentSnapshot`. Wallet `AnalyticsReport` / session Avg site time remain unchanged and continue to use existing report aggregation.
+
 For each run in scope with readable enrichment:
 
 - Concatenate `sites` (preserve `occurred_at` for drilldown join).
-- Merge `missiles` by exact Listener string: sum `reload_cycles`, `hits`, `dead`; set `missiles_per_cycle` from the **latest** contributing run (by run seal / catalog order already used elsewhere); recompute `dead` is **not** re-derived from merged totals — use summed `dead` as stored per run (already `max(0, cycles×cycle−hits)` per run).
-- Totals: sum `warp_seconds`; sum non-null combat; avg = sum / count non-null; `fleet_dead` = sum of merged dead (or sum of per-run fleet_dead — equivalent if merge is complete).
+- Merge `missiles` by exact Listener string: sum `reload_cycles`, `hits`, `dead`; set `missiles_per_cycle` from the **latest** contributing run (by run seal / catalog order already used elsewhere); do **not** re-derive `dead` from merged totals — sum per-run `dead`.
+- Totals: sum `warp_seconds`; sum non-null combat; avg = sum / count non-null (`null` avg when count is 0); `fleet_dead` = sum of merged dead.
+- UI when combat count is 0: total Combat→payout and Avg combat→payout both show `—` (do not show `0` as if measured).
 - `resolved_fc`: latest enriched run’s value (good enough; no multi-FC UI this slice).
 - `diagnostics`: union, plus warn if some runs in scope lack enrichment (`N of M runs lack enrichment`).
 - `listeners`: union of names present after merge.
@@ -122,7 +127,10 @@ Do **not** re-scan Gamelogs at aggregate time.
 
 ### Stale snapshots
 
-Persisted JSON still containing `in_site_*` without `combat_to_payout_*` is treated as unreadable/stale for combat clocks: either fail soft into “needs Re-enrich” diagnostic or load with all combat fields null. Prefer an explicit top-strip warn over inventing values from old in-site.
+Persisted JSON with `in_site_*` and without `combat_to_payout_*` is **stale**:
+
+- **Run scope:** do not invent combat times from old in-site. Attach enrichment only if it deserializes to the new shape; otherwise `enrichment = null` and top-strip diagnostic: `Enrichment needs Re-enrich (schema outdated)`.
+- **Spawn/Overall:** skip stale runs in the enrichment aggregate (they count toward the `N of M lack enrichment` warn).
 
 ## UI
 
@@ -132,7 +140,7 @@ Persisted JSON still containing `in_site_*` without `combat_to_payout_*` is trea
 | Listeners panel | Same chrome as site detail; columns Listener, Reload cycles, Hits, Missiles/cycle, Dead; counts `#,###` |
 | Site drilldown | Warp; **Combat→payout**; Source; ISK `$#,###` |
 | Summary (session) | Keep Avg site time; ISK/liquid/net ISK `$#,###`; LP without `$` |
-| Summary (enrichment) | Warp; Combat→payout total; Avg combat→payout; Dead missiles `#,###`; optional Resolved FC. No file lists. No enrich diagnostics. |
+| Summary (enrichment) | Warp; Combat→payout total; Avg combat→payout; Dead missiles `#,###`; optional Resolved FC. Combat total/avg show `—` when no measurable sites. No file lists. No enrich diagnostics. |
 | Top strip | Enrichment status + diagnostics (missing dir, skipped files, partial spawn coverage) |
 
 ## Errors & edges
