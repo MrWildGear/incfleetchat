@@ -292,13 +292,44 @@ impl RunDesk {
                 st.staging_spawn = Some(draft);
             }
             AmendOp::ReenrichRun { run_id } => {
-                let target = match run_id {
-                    Some(id) => Some(id),
-                    None => self.inner.lock().sealed_run_id.clone(),
+                let ids: Vec<String> = match run_id {
+                    Some(id) => vec![id],
+                    None => {
+                        let scope = self.inner.lock().scope.clone();
+                        match scope {
+                            ReportScope::Run { run_id } => vec![run_id],
+                            ReportScope::Spawn { constellation } => self
+                                .db
+                                .list_run_ids_for_spawn(&constellation)
+                                .await
+                                .map_err(|e| e.to_string())?,
+                            ReportScope::Overall => self
+                                .db
+                                .list_all_run_ids()
+                                .await
+                                .map_err(|e| e.to_string())?,
+                        }
+                    }
                 };
-                if let Some(id) = target {
-                    self.reenrich_run(&id).await?;
+                let total = ids.len();
+                let mut ok = 0usize;
+                let mut diags = Vec::new();
+                for id in &ids {
+                    match self.reenrich_run(id).await {
+                        Ok(()) => ok += 1,
+                        Err(e) => diags.push(Diagnostic {
+                            level: "warn".into(),
+                            message: format!("Failed re-enrich {id}: {e}"),
+                        }),
+                    }
                 }
+                if total > 0 {
+                    diags.push(Diagnostic {
+                        level: if ok == total { "info".into() } else { "warn".into() },
+                        message: format!("{ok} of {total} re-enriched"),
+                    });
+                }
+                self.inner.lock().diagnostics.extend(diags);
             }
         }
         self.snapshot().await
@@ -967,13 +998,97 @@ Immensea
             enrichment.diagnostics
         );
 
-        // Re-enrich via amend without a run_id → falls back to the sealed run.
+        // Re-enrich via amend without a run_id → re-enriches every run in the
+        // current scope (analyze focused Spawn, which holds this one run).
         let refocused = desk
             .amend(AmendOp::ReenrichRun { run_id: None })
             .await
             .unwrap();
         assert!(refocused.enrichment.is_some());
         assert!(refocused.sealed_run_id.is_some());
+    }
+
+    /// `ReenrichRun { Some(id) }` re-enriches that run even when there is no
+    /// sealed run — proves the explicit-id path no longer depends on
+    /// `sealed_run_id` at all.
+    #[tokio::test]
+    async fn reenrich_run_with_explicit_id_works_when_sealed_is_none() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).await.unwrap();
+        let desk = RunDesk::new(db);
+        let focus = seed_one_run(&desk).await;
+        let run_id = focus.catalog.runs[0].run_id.clone();
+
+        {
+            let mut st = desk.inner.lock();
+            st.sealed_run_id = None;
+        }
+        desk.focus(ReportScope::Run {
+            run_id: run_id.clone(),
+        })
+        .await
+        .unwrap();
+        let after = desk
+            .amend(AmendOp::ReenrichRun {
+                run_id: Some(run_id.clone()),
+            })
+            .await
+            .unwrap();
+        assert!(after.enrichment.is_some());
+        assert!(after.sealed_run_id.is_none());
+    }
+
+    /// `ReenrichRun { None }` on a Spawn scope re-enriches every run in that
+    /// spawn — not just the last-sealed one — and reports how many
+    /// succeeded via the top-strip diagnostic.
+    #[tokio::test]
+    async fn reenrich_none_on_spawn_refreshes_all_runs_in_spawn() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).await.unwrap();
+        let desk = RunDesk::new(db);
+
+        let focus1 = seed_one_run(&desk).await;
+        let run1 = focus1.catalog.runs[0].run_id.clone();
+        let constellation = focus1.catalog.runs[0].constellation.clone();
+
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        desk.paste(Tray::Wallet, sample_wallet()).await.unwrap();
+        let focus2 = desk.analyze().await.unwrap();
+        let run2 = focus2
+            .catalog
+            .runs
+            .iter()
+            .map(|r| r.run_id.clone())
+            .find(|id| *id != run1)
+            .expect("second analyze should seal a distinct run");
+
+        {
+            let mut st = desk.inner.lock();
+            st.sealed_run_id = None;
+        }
+        let after = desk
+            .focus(ReportScope::Spawn {
+                constellation: constellation.clone(),
+            })
+            .await
+            .unwrap();
+        assert!(after.sealed_run_id.is_none());
+
+        let after = desk
+            .amend(AmendOp::ReenrichRun { run_id: None })
+            .await
+            .unwrap();
+
+        assert!(matches!(desk.db.load_enrichment_status(&run1).await.unwrap(), EnrichmentLoad::Ok(_)));
+        assert!(matches!(desk.db.load_enrichment_status(&run2).await.unwrap(), EnrichmentLoad::Ok(_)));
+        assert!(
+            after
+                .diagnostics
+                .iter()
+                .any(|d| d.message == "2 of 2 re-enriched"),
+            "diagnostics: {:?}",
+            after.diagnostics
+        );
     }
 
     /// Spawn scope with runs but zero readable enrichments still returns an
