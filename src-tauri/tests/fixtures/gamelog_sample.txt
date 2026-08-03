@@ -1,0 +1,14 @@
+---------------------------------------------------------------
+
+  Gamelog
+  Listener:        Chelien Alabel Maricadie
+  Session Started: 2026.08.02 18:20:40
+---------------------------------------------------------------
+
+[ 2026.08.02 18:21:05 ] (notify) Following Fleet Commander in warp
+[ 2026.08.02 18:22:10 ] (notify) Regrouping to Fleet Commander
+[ 2026.08.02 18:23:15 ] (combat) Your Heavy Missile Hits Sansha Frenzy, doing 312.0 damage.
+[ 2026.08.02 18:24:20 ] (notify) Loading the Scourge Rage Heavy Missile into the Missile Launcher; this will take approximately 35 seconds.
+[ 2026.08.02 18:24:25 ] (notify) You have run out of charges.
+[ 2026.08.02 18:25:30 ] (question) Is the site clear?
+[ 2026.08.02 18:26:35 ] (combat) Sansha Frenzy misses you completely.

@@ -3,6 +3,7 @@ mod board;
 mod commands;
 mod db;
 mod encoding;
+mod gamelog_parse;
 mod parse;
 mod resolve;
 mod run_desk;
