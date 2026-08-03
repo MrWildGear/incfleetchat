@@ -213,6 +213,76 @@ export function ToolsApp() {
     }
   }
 
+  async function onDeleteScope() {
+    if (!focus) return;
+    const catalog = focus.catalog;
+    const scope = focus.scope;
+
+    if (scope.kind === "run") {
+      const ok = window.confirm(
+        `Delete run ${scope.run_id}? This cannot be undone.`,
+      );
+      if (!ok) return;
+      try {
+        const f = await invoke<EditionFocus>("run_desk_delete_run", {
+          runId: scope.run_id,
+        });
+        applyFocus(f);
+      } catch (e) {
+        setError(String(e));
+      }
+      return;
+    }
+
+    if (scope.kind === "spawn") {
+      const n =
+        catalog.spawns.find((s) => s.constellation === scope.constellation)
+          ?.run_count ??
+        catalog.runs.filter((r) => r.constellation === scope.constellation)
+          .length;
+      const ok = window.confirm(
+        `Delete spawn ${scope.constellation} and ${n} runs? This cannot be undone.`,
+      );
+      if (!ok) return;
+      try {
+        const f = await invoke<EditionFocus>("run_desk_delete_spawn", {
+          constellation: scope.constellation,
+        });
+        applyFocus(f);
+      } catch (e) {
+        setError(String(e));
+      }
+      return;
+    }
+
+    const n = catalog.runs.length;
+    const m = catalog.spawns.length;
+    if (n === 0 && m === 0) return;
+    const ok = window.confirm(
+      `Delete ALL analytics data (${n} runs, ${m} spawns)? This cannot be undone.`,
+    );
+    if (!ok) return;
+    try {
+      const f = await invoke<EditionFocus>("run_desk_clear_all");
+      applyFocus(f);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  const deleteDisabled =
+    !focus ||
+    (focus.scope.kind === "overall" &&
+      focus.catalog.runs.length === 0 &&
+      focus.catalog.spawns.length === 0);
+
+  const deleteLabel =
+    focus?.scope.kind === "run"
+      ? "Delete run…"
+      : focus?.scope.kind === "spawn"
+        ? "Delete spawn…"
+        : "Clear all analytics…";
+
   async function copyLoad() {
     await navigator.clipboard.writeText(String(ammoResult.loadIntoShip));
   }
@@ -303,6 +373,14 @@ export function ToolsApp() {
                 ))}
               </select>
             </label>
+            <button
+              type="button"
+              disabled={deleteDisabled}
+              className="rounded border border-border bg-surface-raised px-2 py-1 text-xs text-fg disabled:opacity-40"
+              onClick={() => void onDeleteScope()}
+            >
+              {deleteLabel}
+            </button>
             <label className="text-xs text-muted">
               Space
               <select
