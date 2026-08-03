@@ -10,6 +10,7 @@ import type {
   RunSettings,
   SpaceBand,
 } from "../lib/analyticsTypes";
+import { hasMissileActivity } from "../lib/missileActivity";
 import { cn } from "../lib/utils";
 
 type ToolsSettings = {
@@ -302,7 +303,11 @@ export function ToolsApp() {
 
   const session = focus?.report?.session;
   const canReenrich =
-    focus?.scope.kind === "run" || Boolean(focus?.sealed_run_id);
+    focus?.scope.kind === "run" ||
+    (focus?.scope.kind === "spawn" && (focus.spawn?.run_count ?? 0) > 0) ||
+    (focus?.scope.kind === "overall" && (focus.catalog?.runs?.length ?? 0) > 0);
+  const visibleMissiles =
+    focus?.enrichment?.missiles?.filter(hasMissileActivity) ?? [];
   const enrichmentByTime = useMemo(() => {
     const map = new Map<string, EnrichmentSite>();
     for (const s of focus?.enrichment?.sites ?? []) map.set(s.occurred_at, s);
@@ -665,11 +670,11 @@ export function ToolsApp() {
               </button>
               <button
                 type="button"
-                disabled={!focus?.enrichment?.missiles?.length}
+                disabled={!visibleMissiles.length}
                 onClick={() => setShowListeners((v) => !v)}
                 className={cn(
                   "rounded border px-2 py-1 text-xs",
-                  focus?.enrichment?.missiles?.length
+                  visibleMissiles.length
                     ? "border-accent/40 text-accent hover:bg-accent/10"
                     : "cursor-not-allowed border-border text-muted/40",
                 )}
@@ -854,13 +859,13 @@ export function ToolsApp() {
             </div>
           ) : null}
 
-          {showListeners && focus?.enrichment?.missiles?.length ? (
+          {showListeners && visibleMissiles.length ? (
             <div
               className="flex max-h-[50vh] min-h-48 shrink-0 flex-col overflow-hidden rounded border border-border"
             >
               <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-b border-border bg-surface-raised px-3 py-2">
                 <h3 className="text-xs font-semibold">
-                  Listeners ({focus.enrichment.missiles.length})
+                  Listeners ({visibleMissiles.length})
                 </h3>
                 <button
                   type="button"
@@ -882,7 +887,7 @@ export function ToolsApp() {
                     </tr>
                   </thead>
                   <tbody>
-                    {focus.enrichment.missiles.map((m) => (
+                    {visibleMissiles.map((m) => (
                       <tr key={m.listener} className="border-t border-border">
                         <td className="px-2 py-1">{m.listener}</td>
                         <td className="px-2 py-1">{formatCount(m.reload_cycles)}</td>
@@ -920,7 +925,6 @@ export function ToolsApp() {
                   <thead className="sticky top-0 z-10 bg-surface text-muted">
                     <tr>
                       <th className="px-2 py-1">Time</th>
-                      <th className="px-2 py-1">Gap</th>
                       <th className="px-2 py-1">Duration</th>
                       <th className="px-2 py-1">Break?</th>
                       <th className="px-2 py-1">ISK</th>
@@ -938,7 +942,6 @@ export function ToolsApp() {
                           <td className="px-2 py-1">
                             {new Date(s.occurred_at).toLocaleString()}
                           </td>
-                          <td className="px-2 py-1">{formatDuration(s.gap_seconds)}</td>
                           <td className="px-2 py-1">
                             {formatDuration(s.duration_seconds)}
                           </td>
