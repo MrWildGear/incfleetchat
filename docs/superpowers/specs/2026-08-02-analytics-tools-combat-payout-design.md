@@ -89,7 +89,7 @@ type EnrichmentSnapshot = {
   missiles: MissileStat[];
   totals: {
     warp_seconds: number;
-    combat_to_payout_seconds: number; // sum of non-null only
+    combat_to_payout_seconds: number | null; // null when no measurable sites → UI "—"
     avg_combat_to_payout_seconds: number | null;
     fleet_dead: number;
   };
@@ -117,8 +117,8 @@ For each run in scope with readable enrichment:
 
 - Concatenate `sites` (preserve `occurred_at` for drilldown join).
 - Merge `missiles` by exact Listener string: sum `reload_cycles`, `hits`, `dead`; set `missiles_per_cycle` from the **latest** contributing run (by run seal / catalog order already used elsewhere); do **not** re-derive `dead` from merged totals — sum per-run `dead`.
-- Totals: sum `warp_seconds`; sum non-null combat; avg = sum / count non-null (`null` avg when count is 0); `fleet_dead` = sum of merged dead.
-- UI when combat count is 0: total Combat→payout and Avg combat→payout both show `—` (do not show `0` as if measured).
+- Totals: sum `warp_seconds`; `combat_to_payout_seconds` / `avg_combat_to_payout_seconds` are `null` when there are zero measurable combat sites, else sum and sum/count of non-null; `fleet_dead` = sum of merged dead.
+- UI when combat fields are null: total Combat→payout and Avg combat→payout both show `—`.
 - `resolved_fc`: latest enriched run’s value (good enough; no multi-FC UI this slice).
 - `diagnostics`: union, plus warn if some runs in scope lack enrichment (`N of M runs lack enrichment`).
 - `listeners`: union of names present after merge.
