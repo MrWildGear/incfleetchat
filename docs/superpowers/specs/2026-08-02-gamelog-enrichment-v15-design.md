@@ -1,7 +1,7 @@
 # Gamelog Enrichment (v1.5) & Analytics Roadmap — Design
 
 **Date:** 2026-08-02  
-**Status:** Approved (pending user review)  
+**Status:** Approved  
 **App:** IncFleetChat  
 **Depends on:** [2026-08-02-run-analytics-tools-design.md](./2026-08-02-run-analytics-tools-design.md) (v1 wallet analytics + RunDesk)
 
