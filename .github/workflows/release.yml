@@ -1,0 +1,100 @@
+name: "Release"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - release
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    outputs:
+      notes: ${{ steps.notes.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --unreleased --strip header
+
+      - name: Prepare notes output
+        id: notes
+        shell: bash
+        env:
+          CONTENT: ${{ steps.cliff.outputs.content }}
+        run: |
+          notes="## What's Changed"$'\n\n'"$CONTENT"
+          if [ -z "$(printf '%s' "$CONTENT" | tr -d '[:space:]')" ]; then
+            notes="See the assets below to download and install IncFleetChat."
+          fi
+          {
+            echo 'notes<<CHANGELOG_EOF'
+            echo "$notes"
+            echo CHANGELOG_EOF
+          } >> "$GITHUB_OUTPUT"
+
+  publish-tauri:
+    needs: changelog
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Sync version from VERSION
+        run: npm run sync-version
+
+      - name: Detect pre-release
+        id: version
+        shell: bash
+        run: echo "prerelease=$(node -p "require('./src-tauri/tauri.conf.json').version.includes('-')")" >> "$GITHUB_OUTPUT"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "IncFleetChat v__VERSION__"
+          releaseBody: ${{ needs.changelog.outputs.notes }}
+          releaseDraft: true
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          includeUpdaterJson: true
+
+      - name: Upload portable Windows executable
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          exe=$(find src-tauri/target/release -maxdepth 1 -name '*.exe' | head -1)
+          if [ -z "$exe" ]; then
+            echo "Portable exe not found under src-tauri/target/release" >&2
+            exit 1
+          fi
+          dest="IncFleetChat_${version}_x64-portable.exe"
+          cp "$exe" "$dest"
+          gh release upload "v${version}" "$dest" --clobber
