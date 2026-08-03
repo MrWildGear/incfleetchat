@@ -301,9 +301,7 @@ export function ToolsApp() {
 
   const session = focus?.report?.session;
   const canReenrich =
-    focus?.scope.kind === "run" ||
-    Boolean(focus?.sealed_run_id) ||
-    Boolean(focus?.enrichment);
+    focus?.scope.kind === "run" || Boolean(focus?.sealed_run_id);
   const enrichmentByTime = useMemo(() => {
     const map = new Map<string, EnrichmentSite>();
     for (const s of focus?.enrichment?.sites ?? []) map.set(s.occurred_at, s);

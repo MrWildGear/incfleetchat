@@ -595,7 +595,14 @@ pub fn aggregate_enrichments(
             }
         }
 
-        diagnostics.extend(snapshot.diagnostics.iter().cloned());
+        for d in &snapshot.diagnostics {
+            if !diagnostics
+                .iter()
+                .any(|existing: &Diagnostic| existing.level == d.level && existing.message == d.message)
+            {
+                diagnostics.push(d.clone());
+            }
+        }
         resolved_fc = snapshot.resolved_fc.clone();
     }
 
@@ -773,6 +780,35 @@ mod tests {
                 .iter()
                 .any(|d| d.level == "warn" && d.message == "2 of 3 runs lack enrichment"),
             "diagnostics: {:?}",
+            aggregate.diagnostics
+        );
+    }
+
+    #[test]
+    fn aggregate_dedupes_repeated_diagnostics_across_runs() {
+        let dup = Diagnostic {
+            level: "warn".into(),
+            message: "skipped malformed gamelog line".into(),
+        };
+
+        let mut run1 = empty_snapshot(Some("FC One"));
+        run1.diagnostics = vec![dup.clone()];
+
+        let mut run2 = empty_snapshot(Some("FC Two"));
+        run2.diagnostics = vec![dup.clone()];
+
+        let runs = vec![("run-1".to_string(), run1), ("run-2".to_string(), run2)];
+        let aggregate = aggregate_enrichments(&runs, 2);
+
+        let matching: Vec<_> = aggregate
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == dup.level && d.message == dup.message)
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "expected diagnostic to be deduped, got: {:?}",
             aggregate.diagnostics
         );
     }
