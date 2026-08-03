@@ -71,13 +71,14 @@ type EnrichmentSite = {
 };
 
 type EnrichmentTotals = {
-  approach_seconds: number | null; // was warp_seconds: number (sum of non-null)
+  approach_seconds: number | null; // sum of non-null site approach; null if none
   combat_to_payout_seconds: number | null;
   avg_combat_to_payout_seconds: number | null;
-  // optional: avg_approach_seconds if we mirror combat avg — see Implementation notes
   fleet_dead: number;
 };
 ```
+
+No `avg_approach_seconds` this slice (totals today have no warp avg — only combat avg).
 
 Persisted rows with `warp_seconds` and without `approach_seconds` are **stale** (deny_unknown_fields / missing field → Re-enrich), same operational pattern as prior enrichment breaks.
 
@@ -133,7 +134,7 @@ Do **not** use Regrouping / CombatAny / segment end for Approach or for Combat�
 - TDD at seams; Conventional Commits; code-reviewer before merge.
 - Remove or gut `coalesce_intervals` / warp debounce helpers if unused after rewrite.
 - Re-enrich after ship.
-- If Summary today shows only total Warp (not avg), keep total Approach only unless avg already exists for warp (it does not on totals today — only combat has avg).
+- Summary: total Approach only (no approach average).
 
 ## Out of scope / later
 
