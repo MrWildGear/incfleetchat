@@ -97,6 +97,7 @@ pub enum EnrichmentSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct EnrichmentSite {
     pub occurred_at: DateTime<Utc>,
     pub warp_seconds: i64,
@@ -115,6 +116,7 @@ pub struct MissileStat {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct EnrichmentTotals {
     pub warp_seconds: i64,
     pub combat_to_payout_seconds: Option<i64>,
@@ -123,6 +125,7 @@ pub struct EnrichmentTotals {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct EnrichmentSnapshot {
     pub resolved_fc: Option<String>,
     /// Listener headers used (all listeners with logs in range).
@@ -131,4 +134,32 @@ pub struct EnrichmentSnapshot {
     pub sites: Vec<EnrichmentSite>,
     pub missiles: Vec<MissileStat>,
     pub totals: EnrichmentTotals,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EnrichmentSnapshot;
+
+    #[test]
+    fn stale_in_site_seconds_json_fails_to_deserialize() {
+        let stale = r#"{
+            "resolved_fc": null,
+            "listeners": [],
+            "diagnostics": [],
+            "sites": [{
+                "occurred_at": "2026-01-01T00:00:00Z",
+                "warp_seconds": 10,
+                "in_site_seconds": 330,
+                "is_break": false,
+                "source": "fc"
+            }],
+            "missiles": [],
+            "totals": {
+                "warp_seconds": 10,
+                "fleet_dead": 0
+            }
+        }"#;
+
+        assert!(serde_json::from_str::<EnrichmentSnapshot>(stale).is_err());
+    }
 }
