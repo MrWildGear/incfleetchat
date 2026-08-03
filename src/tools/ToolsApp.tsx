@@ -739,6 +739,12 @@ export function ToolsApp() {
                     value={formatDuration(session.avg_site_seconds)}
                   />
                   <Row
+                    label="Avg combat→payout"
+                    value={formatDuration(
+                      focus?.enrichment?.totals.avg_combat_to_payout_seconds,
+                    )}
+                  />
+                  <Row
                     label="Liquid ISK/hr"
                     value={formatIskMoney(session.liquid_isk_per_hour)}
                   />
