@@ -182,6 +182,27 @@ async fn run_desk_reenrich(
 }
 
 #[tauri::command]
+async fn run_desk_delete_run(
+    desk: State<'_, Arc<RunDesk>>,
+    run_id: String,
+) -> Result<EditionFocus, String> {
+    desk.delete_run(&run_id).await
+}
+
+#[tauri::command]
+async fn run_desk_delete_spawn(
+    desk: State<'_, Arc<RunDesk>>,
+    constellation: String,
+) -> Result<EditionFocus, String> {
+    desk.delete_spawn(&constellation).await
+}
+
+#[tauri::command]
+async fn run_desk_clear_all(desk: State<'_, Arc<RunDesk>>) -> Result<EditionFocus, String> {
+    desk.clear_all().await
+}
+
+#[tauri::command]
 async fn lookup_vanguard_payout(
     space: crate::vanguard_payouts::SpaceBand,
     fleet_size: u32,
@@ -237,6 +258,9 @@ pub fn run_app() {
             run_desk_focus,
             run_desk_amend,
             run_desk_reenrich,
+            run_desk_delete_run,
+            run_desk_delete_spawn,
+            run_desk_clear_all,
             lookup_vanguard_payout,
         ])
         .run(tauri::generate_context!())
