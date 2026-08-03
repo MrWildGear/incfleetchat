@@ -10,6 +10,7 @@ import type {
   RunSettings,
   SpaceBand,
 } from "../lib/analyticsTypes";
+import { avgCombatToPayoutForHour } from "../lib/hourlyAvgCombat";
 import { hasMissileActivity } from "../lib/missileActivity";
 import { cn } from "../lib/utils";
 
@@ -694,6 +695,7 @@ export function ToolsApp() {
                     <th className="px-2 py-1">Total LP</th>
                     <th className="px-2 py-1">Sites</th>
                     <th className="px-2 py-1">Avg site</th>
+                    <th className="px-2 py-1">Avg combat→payout</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -708,11 +710,19 @@ export function ToolsApp() {
                       <td className="px-2 py-1">
                         {formatDuration(h.avg_site_seconds)}
                       </td>
+                      <td className="px-2 py-1">
+                        {formatDuration(
+                          avgCombatToPayoutForHour(
+                            h.hour_start,
+                            focus?.enrichment?.sites ?? [],
+                          ),
+                        )}
+                      </td>
                     </tr>
                   ))}
                   {!focus?.report?.hourly?.length && (
                     <tr>
-                      <td colSpan={5} className="px-2 py-6 text-center text-muted">
+                      <td colSpan={6} className="px-2 py-6 text-center text-muted">
                         No report yet — paste Manifest + wallet and Analyze
                       </td>
                     </tr>
