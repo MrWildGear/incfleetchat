@@ -52,6 +52,8 @@ export function ToolsApp() {
   const [gamelogsPath, setGamelogsPath] = useState("");
   const [fcCharacter, setFcCharacter] = useState("");
   const [enriching, setEnriching] = useState(false);
+  const [scopeBusy, setScopeBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const walletRef = useRef<HTMLTextAreaElement>(null);
 
   const [settings, setSettings] = useState<RunSettings>({
@@ -206,15 +208,18 @@ export function ToolsApp() {
 
   async function setScope(scope: ReportScope) {
     try {
+      setScopeBusy(true);
       const f = await invoke<EditionFocus>("run_desk_focus", { scope });
       applyFocus(f);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setScopeBusy(false);
     }
   }
 
   async function onDeleteScope() {
-    if (!focus) return;
+    if (!focus || scopeBusy || deleting) return;
     const catalog = focus.catalog;
     const scope = focus.scope;
 
@@ -224,12 +229,15 @@ export function ToolsApp() {
       );
       if (!ok) return;
       try {
+        setDeleting(true);
         const f = await invoke<EditionFocus>("run_desk_delete_run", {
           runId: scope.run_id,
         });
         applyFocus(f);
       } catch (e) {
         setError(String(e));
+      } finally {
+        setDeleting(false);
       }
       return;
     }
@@ -245,12 +253,15 @@ export function ToolsApp() {
       );
       if (!ok) return;
       try {
+        setDeleting(true);
         const f = await invoke<EditionFocus>("run_desk_delete_spawn", {
           constellation: scope.constellation,
         });
         applyFocus(f);
       } catch (e) {
         setError(String(e));
+      } finally {
+        setDeleting(false);
       }
       return;
     }
@@ -263,15 +274,20 @@ export function ToolsApp() {
     );
     if (!ok) return;
     try {
+      setDeleting(true);
       const f = await invoke<EditionFocus>("run_desk_clear_all");
       applyFocus(f);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setDeleting(false);
     }
   }
 
   const deleteDisabled =
     !focus ||
+    scopeBusy ||
+    deleting ||
     (focus.scope.kind === "overall" &&
       focus.catalog.runs.length === 0 &&
       focus.catalog.spawns.length === 0);
@@ -341,6 +357,7 @@ export function ToolsApp() {
               Scope
               <select
                 className="ml-2 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
+                disabled={scopeBusy}
                 value={
                   focus?.scope.kind === "spawn"
                     ? `spawn:${focus.scope.constellation}`
