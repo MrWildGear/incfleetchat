@@ -72,6 +72,9 @@ export function useAppUpdater(): AppUpdaterState {
         setPendingVersion(update.version);
         setPromptOpen(true);
         setDeferredUpdate(false);
+      } else {
+        setPendingVersion(null);
+        setDeferredUpdate(false);
       }
     } catch (err) {
       setManualResult(manualCheckOutcome(null, err));
