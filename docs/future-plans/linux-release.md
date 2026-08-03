@@ -25,3 +25,5 @@ Add Linux builds to the IncFleetChat GitHub release pipeline so Linux users can 
 ## Notes
 
 Reuse root `VERSION` + `sync-version` and the same draft→Publish gate as Windows. Portable Windows exe has no Linux analogue; prefer one installer family for updater, same rule as NSIS-only on Windows.
+
+Linux builds pull `glib` 0.18.5 via webkit2gtk (RUSTSEC-2024-0429). Accepted until Tauri 3 — see `docs/security/RUSTSEC-2024-0429.md`.

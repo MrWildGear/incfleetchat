@@ -1,0 +1,4 @@
+[advisories]
+# glib 0.18.5 via Tauri 2 → gtk/webkit2gtk (Linux only). Fixed in 0.20.0, which
+# requires GTK4 / Tauri 3. See docs/security/RUSTSEC-2024-0429.md.
+ignore = ["RUSTSEC-2024-0429"]
