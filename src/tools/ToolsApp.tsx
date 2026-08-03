@@ -649,7 +649,7 @@ export function ToolsApp() {
                     ? "border-accent/40 bg-accent/10 text-accent hover:bg-accent/20"
                     : "cursor-not-allowed border-border text-muted/40",
                 )}
-                title="Recompute warp/in-site and dead missiles from gamelogs"
+                title="Recompute combat→payout and dead missiles from gamelogs"
               >
                 Re-enrich
               </button>
