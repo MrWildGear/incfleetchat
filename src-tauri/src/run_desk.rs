@@ -304,6 +304,60 @@ impl RunDesk {
         self.snapshot().await
     }
 
+    pub async fn delete_run(&self, run_id: &str) -> Result<EditionFocus, String> {
+        let outcome = self.db.delete_run(run_id).await?;
+        {
+            let mut st = self.inner.lock();
+            if st.sealed_run_id.as_deref() == Some(run_id) {
+                st.sealed_run_id = None;
+            }
+            st.scope = if outcome.spawn_removed {
+                ReportScope::Overall
+            } else {
+                ReportScope::Spawn {
+                    constellation: outcome.constellation,
+                }
+            };
+        }
+        self.snapshot().await
+    }
+
+    pub async fn delete_spawn(&self, constellation: &str) -> Result<EditionFocus, String> {
+        // Capture sealed id before DB wipe so we can decide clearance.
+        let sealed = self.inner.lock().sealed_run_id.clone();
+        let sealed_in_spawn = if let Some(ref id) = sealed {
+            self.db
+                .load_catalog()
+                .await
+                .map_err(|e| e.to_string())?
+                .runs
+                .iter()
+                .any(|r| r.run_id == *id && r.constellation == constellation)
+        } else {
+            false
+        };
+
+        self.db.delete_spawn(constellation).await?;
+        {
+            let mut st = self.inner.lock();
+            if sealed_in_spawn {
+                st.sealed_run_id = None;
+            }
+            st.scope = ReportScope::Overall;
+        }
+        self.snapshot().await
+    }
+
+    pub async fn clear_all(&self) -> Result<EditionFocus, String> {
+        self.db.clear_all_analytics().await?;
+        {
+            let mut st = self.inner.lock();
+            st.sealed_run_id = None;
+            st.scope = ReportScope::Overall;
+        }
+        self.snapshot().await
+    }
+
     async fn snapshot(&self) -> Result<EditionFocus, String> {
         let catalog = self.db.load_catalog().await.map_err(|e| e.to_string())?;
         let (trays, spawn, scope, mut diagnostics, settings, staging_spawn, sealed_run_id) = {
@@ -626,5 +680,151 @@ Immensea
         );
         // Re-enrich stays available: there is a sealed run to recompute.
         assert!(focus.sealed_run_id.is_some());
+    }
+
+    fn sample_manifest() -> &'static str {
+        "\
+New Null-Sec Incursion: 4MY-AB - Immensea
+Constellation
+4MY-AB
+Region
+Immensea
+"
+    }
+
+    fn sample_wallet() -> &'static str {
+        "\
+2026.07.29 23:08\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\tx\n\
+2026.07.29 23:14\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\ty\n"
+    }
+
+    async fn seed_one_run(desk: &RunDesk) -> EditionFocus {
+        desk.paste(Tray::Manifest, sample_manifest()).await.unwrap();
+        desk.amend(AmendOp::SetSessionSettings {
+            settings: RunSettings {
+                space: SpaceBand::LowNull,
+                fleet_size: 15,
+                expected_isk: 15_000_000,
+                lp_per_char: 2_000,
+                isk_per_lp: 1400.0,
+                break_threshold_minutes: 25,
+                run_start: None,
+            },
+        })
+        .await
+        .unwrap();
+        desk.paste(Tray::Wallet, sample_wallet()).await.unwrap();
+        desk.analyze().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn delete_run_updates_catalog_scope_and_clears_sealed() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).await.unwrap();
+        let desk = RunDesk::new(db);
+        let focus = seed_one_run(&desk).await;
+        let run_id = focus.catalog.runs[0].run_id.clone();
+        assert_eq!(focus.sealed_run_id.as_deref(), Some(run_id.as_str()));
+
+        desk.focus(ReportScope::Run {
+            run_id: run_id.clone(),
+        })
+        .await
+        .unwrap();
+
+        let after = desk.delete_run(&run_id).await.unwrap();
+        assert!(after.catalog.runs.is_empty());
+        assert!(after.catalog.spawns.is_empty());
+        assert_eq!(after.scope, ReportScope::Overall);
+        assert!(after.sealed_run_id.is_none());
+        assert_eq!(
+            after
+                .staging_spawn
+                .as_ref()
+                .and_then(|s| s.constellation.as_deref()),
+            Some("4MY-AB")
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_run_with_sibling_focuses_parent_spawn() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).await.unwrap();
+        // Two runs same spawn: analyze twice with wallet re-paste
+        let desk = RunDesk::new(db);
+        let first = seed_one_run(&desk).await;
+        let run_a = first.catalog.runs[0].run_id.clone();
+        // Re-stage wallet for second analyze (manifest still staged)
+        desk.paste(Tray::Wallet, sample_wallet()).await.unwrap();
+        let second = desk.analyze().await.unwrap();
+        let run_b = second
+            .catalog
+            .runs
+            .iter()
+            .find(|r| r.run_id != run_a)
+            .unwrap()
+            .run_id
+            .clone();
+
+        let after = desk.delete_run(&run_a).await.unwrap();
+        assert_eq!(after.catalog.runs.len(), 1);
+        assert_eq!(after.catalog.runs[0].run_id, run_b);
+        assert_eq!(
+            after.scope,
+            ReportScope::Spawn {
+                constellation: "4MY-AB".into()
+            }
+        );
+        // sealed was run_b (last analyze); still present
+        assert_eq!(after.sealed_run_id.as_deref(), Some(run_b.as_str()));
+    }
+
+    #[tokio::test]
+    async fn delete_spawn_clears_sealed_when_sealed_in_spawn() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).await.unwrap();
+        let desk = RunDesk::new(db);
+        let focus = seed_one_run(&desk).await;
+        assert!(focus.sealed_run_id.is_some());
+
+        let after = desk.delete_spawn("4MY-AB").await.unwrap();
+        assert!(after.catalog.runs.is_empty());
+        assert!(after.catalog.spawns.is_empty());
+        assert_eq!(after.scope, ReportScope::Overall);
+        assert!(after.sealed_run_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn clear_all_empties_catalog_and_clears_sealed_keeps_trays() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).await.unwrap();
+        let desk = RunDesk::new(db);
+        let _ = seed_one_run(&desk).await;
+        // Put something in wallet tray after analyze
+        desk.paste(Tray::Wallet, sample_wallet()).await.unwrap();
+        let before = desk.open().await.unwrap();
+        assert!(before.trays.pending_sites >= 1);
+        assert!(before.sealed_run_id.is_some());
+
+        let after = desk.clear_all().await.unwrap();
+        assert!(after.catalog.runs.is_empty());
+        assert!(after.catalog.spawns.is_empty());
+        assert_eq!(after.scope, ReportScope::Overall);
+        assert!(after.sealed_run_id.is_none());
+        assert!(after.trays.pending_sites >= 1);
+    }
+
+    #[tokio::test]
+    async fn delete_run_unknown_leaves_state() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).await.unwrap();
+        let desk = RunDesk::new(db);
+        let _ = seed_one_run(&desk).await;
+        let before = desk.open().await.unwrap();
+        let err = desk.delete_run("nope").await.unwrap_err();
+        assert!(!err.is_empty());
+        let after = desk.open().await.unwrap();
+        assert_eq!(after.catalog.runs.len(), before.catalog.runs.len());
+        assert_eq!(after.scope, before.scope);
     }
 }
