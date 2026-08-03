@@ -31,7 +31,7 @@ Version is duplicated across `package.json`, `src-tauri/Cargo.toml`, and `src-ta
 |-------|--------|
 | Version file | Root `VERSION` (one-line semver) + `scripts/sync-version.mjs` |
 | Sync targets | `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` |
-| Release trigger | Push to `release` + `workflow_dispatch` |
+| Release trigger | Push to the `release` **branch** + `workflow_dispatch` |
 | Release visibility | Draft first; human Publishes on GitHub (updater only sees published) |
 | Platforms now | Windows only |
 | Installer | NSIS only (updater path); no MSI as update family |
@@ -76,7 +76,7 @@ VERSION ──sync-version──► package.json / Cargo.toml / tauri.conf.json
    - `includeUpdaterJson: true`
    - env: `GITHUB_TOKEN`, `TAURI_SIGNING_PRIVATE_KEY` (+ password if used)
    - NSIS-only installer for the updater-supported path
-3. **Portable upload** — copy release `.exe` → `IncFleetChat_${version}_x64-portable.exe` → `gh release upload` onto the draft tag.
+3. **Portable upload** — copy the built app binary from `src-tauri/target/release/*.exe` (not the NSIS setup installer under `bundle/nsis/`) → rename to `IncFleetChat_${version}_x64-portable.exe` → `gh release upload` onto the draft tag.
 
 **One-time setup:** `tauri signer generate`; store private key (and password) in Actions secrets; embed public key in `tauri.conf.json` updater config. Create and push public repo `MrWildGear/incfleetchat`.
 
@@ -85,7 +85,8 @@ VERSION ──sync-version──► package.json / Cargo.toml / tauri.conf.json
 - Plugins: `@tauri-apps/plugin-updater`, `@tauri-apps/plugin-process` (relaunch).
 - Config: `bundle.createUpdaterArtifacts: true`; `plugins.updater.pubkey`; endpoint  
   `https://github.com/MrWildGear/incfleetchat/releases/latest/download/latest.json`;  
-  `windows.installMode: passive`.
+  `windows.installMode: passive`.  
+  Note: GitHub `/releases/latest` skips drafts and **prereleases**, so hyphenated versions do not drive in-app updates until a non-prerelease is published (intentional; no beta channel).
 - Capabilities: allow updater + process relaunch on the main window.
 - **Launch:** quiet `check()` after main window is ready; if update available → launch modal.
 - **Settings:** manual Check for updates; same prompt path if available.
