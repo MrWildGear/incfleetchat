@@ -29,6 +29,9 @@ pub enum AmendOp {
     ReopenTrays,
     OpenRun { run_id: String },
     SetConstellation { constellation: String },
+    /// Recompute gamelog enrichment for a run (defaults to the last sealed
+    /// run when `run_id` is omitted) and persist it.
+    ReenrichRun { run_id: Option<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -72,6 +75,7 @@ pub struct EditionFocus {
     pub diagnostics: Vec<Diagnostic>,
     pub session_settings: RunSettings,
     pub staging_spawn: Option<SpawnDraft>,
+    pub enrichment: Option<EnrichmentSnapshot>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

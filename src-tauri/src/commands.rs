@@ -53,6 +53,10 @@ pub struct SettingsPatch {
     pub character: Option<Option<String>>,
     pub chatlogs_dir: Option<Option<String>>,
     pub always_on_top: Option<bool>,
+    pub gamelogs_dir: Option<Option<String>>,
+    pub fc_character: Option<Option<String>>,
+    pub ammo_launchers: Option<i64>,
+    pub ammo_per_launcher: Option<i64>,
 }
 
 #[tauri::command]
@@ -73,6 +77,18 @@ async fn set_settings(
         if let Some(win) = app.get_webview_window("main") {
             let _ = win.set_always_on_top(a);
         }
+    }
+    if let Some(d) = patch.gamelogs_dir {
+        next.gamelogs_dir = d;
+    }
+    if let Some(f) = patch.fc_character {
+        next.fc_character = f;
+    }
+    if let Some(a) = patch.ammo_launchers {
+        next.ammo_launchers = a;
+    }
+    if let Some(a) = patch.ammo_per_launcher {
+        next.ammo_per_launcher = a;
     }
     let settings = state.set_settings(next).await?;
     let _ = app.emit("board-updated", state.board());
@@ -158,6 +174,14 @@ async fn run_desk_amend(
 }
 
 #[tauri::command]
+async fn run_desk_reenrich(
+    desk: State<'_, Arc<RunDesk>>,
+    run_id: Option<String>,
+) -> Result<EditionFocus, String> {
+    desk.amend(AmendOp::ReenrichRun { run_id }).await
+}
+
+#[tauri::command]
 async fn lookup_vanguard_payout(
     space: crate::vanguard_payouts::SpaceBand,
     fleet_size: u32,
@@ -212,6 +236,7 @@ pub fn run_app() {
             run_desk_analyze,
             run_desk_focus,
             run_desk_amend,
+            run_desk_reenrich,
             lookup_vanguard_payout,
         ])
         .run(tauri::generate_context!())

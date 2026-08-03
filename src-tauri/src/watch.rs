@@ -92,6 +92,7 @@ mod tests {
                 character: Some("Test Pilot".into()),
                 chatlogs_dir: Some(dir.path().to_string_lossy().to_string()),
                 always_on_top: false,
+                ..Default::default()
             })
             .await
             .unwrap();

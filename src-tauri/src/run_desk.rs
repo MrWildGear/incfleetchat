@@ -1,13 +1,16 @@
 //! RunDesk document-session: trays → analyze → focus.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
+use std::path::PathBuf;
 
 use crate::analytics_types::*;
 use crate::db::Db;
+use crate::enrichment::enrich_run;
+use crate::gamelog_scan::{default_gamelogs_dir, scan_gamelogs};
 use crate::spawn_parse::{parse_manifest, SpawnDraft};
 use crate::timing::{build_report, merge_reports, AnalyticsReport, RunSettings};
-use crate::wallet_parse::{parse_wallet_journal, WalletPayout};
+use crate::wallet_parse::{extract_wallet_fc_hint, parse_wallet_journal, WalletPayout};
 
 pub struct RunDesk {
     db: Db,
@@ -142,6 +145,10 @@ impl RunDesk {
             .await
             .map_err(|e| e.to_string())?;
 
+        let enrich_result = self
+            .enrich_and_save(&run_id, &settings, &report, &wallet_text)
+            .await;
+
         {
             let mut st = self.inner.lock();
             st.sealed_run_id = Some(run_id.clone());
@@ -156,9 +163,84 @@ impl RunDesk {
                 level: "info".into(),
                 message: format!("Saved run {} ({} sites)", run_id, report.session.sites_ran),
             });
+            if let Err(e) = enrich_result {
+                st.diagnostics.push(Diagnostic {
+                    level: "warn".into(),
+                    message: format!("Gamelog enrichment skipped: {e}"),
+                });
+            }
         }
 
         self.snapshot().await
+    }
+
+    /// Scan gamelogs for `run_id`'s wallet window and persist an
+    /// `EnrichmentSnapshot`. No-op (not an error) when no gamelogs directory
+    /// is configured/present or the run has no sites.
+    async fn enrich_and_save(
+        &self,
+        run_id: &str,
+        settings: &RunSettings,
+        report: &AnalyticsReport,
+        wallet_text: &str,
+    ) -> Result<(), String> {
+        if report.sites.is_empty() {
+            return Ok(());
+        }
+        let site_times: Vec<DateTime<Utc>> =
+            report.sites.iter().map(|s| s.occurred_at).collect();
+
+        let app_settings = self.db.get_settings().await.map_err(|e| e.to_string())?;
+        let gamelogs_dir = app_settings
+            .gamelogs_dir
+            .as_ref()
+            .map(|d| d.trim())
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(default_gamelogs_dir);
+        if !gamelogs_dir.is_dir() {
+            return Ok(());
+        }
+
+        let wallet_start = settings.run_start.unwrap_or(site_times[0]);
+        let wallet_end = *site_times.last().unwrap();
+        let scan = scan_gamelogs(&gamelogs_dir, wallet_start, wallet_end);
+
+        let wallet_fc_hint = parse_wallet_journal(wallet_text, settings.expected_isk)
+            .events
+            .first()
+            .and_then(|e| extract_wallet_fc_hint(&e.description));
+
+        let missiles_per_cycle = (app_settings.ammo_launchers.max(0) as u32)
+            .saturating_mul(app_settings.ammo_per_launcher.max(0) as u32);
+
+        let snapshot = enrich_run(
+            &scan.logs,
+            &site_times,
+            settings.break_threshold_minutes,
+            settings.run_start,
+            missiles_per_cycle,
+            app_settings.fc_character.as_deref(),
+            wallet_fc_hint.as_deref(),
+        );
+
+        self.db
+            .save_enrichment(run_id, &snapshot)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    /// Recompute and persist enrichment for an already-sealed run.
+    async fn reenrich_run(&self, run_id: &str) -> Result<(), String> {
+        let bundle = self
+            .db
+            .load_run_for_enrich(run_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let (settings, report, wallet_text) =
+            bundle.ok_or_else(|| format!("Run {run_id} not found"))?;
+        self.enrich_and_save(run_id, &settings, &report, &wallet_text)
+            .await
     }
 
     pub async fn focus(&self, scope: ReportScope) -> Result<EditionFocus, String> {
@@ -195,13 +277,22 @@ impl RunDesk {
                 draft.constellation = Some(constellation.trim().to_string());
                 st.staging_spawn = Some(draft);
             }
+            AmendOp::ReenrichRun { run_id } => {
+                let target = match run_id {
+                    Some(id) => Some(id),
+                    None => self.inner.lock().sealed_run_id.clone(),
+                };
+                if let Some(id) = target {
+                    self.reenrich_run(&id).await?;
+                }
+            }
         }
         self.snapshot().await
     }
 
     async fn snapshot(&self) -> Result<EditionFocus, String> {
         let catalog = self.db.load_catalog().await.map_err(|e| e.to_string())?;
-        let (trays, spawn, scope, diagnostics, settings, staging_spawn) = {
+        let (trays, spawn, scope, diagnostics, settings, staging_spawn, sealed_run_id) = {
             let st = self.inner.lock();
             let trays = TrayState {
                 manifest: if st.staging_spawn
@@ -251,10 +342,12 @@ impl RunDesk {
                 st.diagnostics.clone(),
                 st.settings.clone(),
                 st.staging_spawn.clone(),
+                st.sealed_run_id.clone(),
             )
         };
 
         let report = self.report_for_scope(&scope, &settings).await?;
+        let enrichment = self.enrichment_for_scope(&scope, &sealed_run_id).await?;
 
         Ok(EditionFocus {
             trays,
@@ -265,7 +358,26 @@ impl RunDesk {
             diagnostics,
             session_settings: settings,
             staging_spawn,
+            enrichment,
         })
+    }
+
+    /// Enrichment for the currently-focused run: the scoped run when
+    /// browsing a specific run, otherwise the most recently sealed run
+    /// (e.g. right after Analyze, before the user navigates elsewhere).
+    async fn enrichment_for_scope(
+        &self,
+        scope: &ReportScope,
+        sealed_run_id: &Option<String>,
+    ) -> Result<Option<EnrichmentSnapshot>, String> {
+        let run_id = match scope {
+            ReportScope::Run { run_id } => Some(run_id.clone()),
+            _ => sealed_run_id.clone(),
+        };
+        match run_id {
+            Some(id) => self.db.load_enrichment(&id).await.map_err(|e| e.to_string()),
+            None => Ok(None),
+        }
     }
 
     async fn report_for_scope(
@@ -349,5 +461,79 @@ Immensea
 
         let overall = desk.focus(ReportScope::Overall).await.unwrap();
         assert_eq!(overall.report.as_ref().unwrap().session.sites_ran, 2);
+    }
+
+    #[tokio::test]
+    async fn analyze_persists_and_attaches_gamelog_enrichment() {
+        use chrono::TimeZone;
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let gamelogs_dir = dir.path().join("Gamelogs");
+        fs::create_dir_all(&gamelogs_dir).unwrap();
+        fs::write(
+            gamelogs_dir.join("20260729_225000.txt"),
+            "---------------------------------------------------------------\n\
+  Gamelog\n\
+  Listener:        FC Pilot\n\
+  Session Started: 2026.07.29 22:50:00\n\
+---------------------------------------------------------------\n\
+\n\
+[ 2026.07.29 23:09:30 ] (notify) Following Fleet Commander in warp\n\
+[ 2026.07.29 23:11:00 ] (combat) Hits Structure for 100 damage\n",
+        )
+        .unwrap();
+
+        let db = Db::open(&dir.path().join("t.db")).await.unwrap();
+        let mut app_settings = db.get_settings().await.unwrap();
+        app_settings.gamelogs_dir = Some(gamelogs_dir.to_string_lossy().to_string());
+        app_settings.fc_character = Some("FC Pilot".into());
+        db.set_settings(&app_settings).await.unwrap();
+
+        let desk = RunDesk::new(db);
+
+        let manifest = "\
+New Null-Sec Incursion: 4MY-AB - Immensea
+Constellation
+4MY-AB
+Region
+Immensea
+";
+        desk.paste(Tray::Manifest, manifest).await.unwrap();
+        desk.amend(AmendOp::SetSessionSettings {
+            settings: RunSettings {
+                space: SpaceBand::LowNull,
+                fleet_size: 15,
+                expected_isk: 15_000_000,
+                lp_per_char: 2_000,
+                isk_per_lp: 1400.0,
+                break_threshold_minutes: 25,
+                run_start: Some(Utc.with_ymd_and_hms(2026, 7, 29, 22, 54, 0).unwrap()),
+            },
+        })
+        .await
+        .unwrap();
+
+        let wallet = "\
+2026.07.29 23:08\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\tCONCORD rewarded FC Pilot for services performed.\n\
+2026.07.29 23:14\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\tCONCORD rewarded FC Pilot for services performed.\n";
+        desk.paste(Tray::Wallet, wallet).await.unwrap();
+
+        let focus = desk.analyze().await.unwrap();
+        let enrichment = focus
+            .enrichment
+            .expect("enrichment should be attached to focus right after analyze");
+        assert_eq!(enrichment.resolved_fc.as_deref(), Some("FC Pilot"));
+        assert_eq!(enrichment.sites.len(), 2);
+        assert_eq!(enrichment.sites[1].source, EnrichmentSource::Fc);
+        assert_eq!(enrichment.sites[1].warp_seconds, 90);
+        assert_eq!(enrichment.sites[1].in_site_seconds, 180);
+
+        // Re-enrich via amend without a run_id → falls back to the sealed run.
+        let refocused = desk
+            .amend(AmendOp::ReenrichRun { run_id: None })
+            .await
+            .unwrap();
+        assert!(refocused.enrichment.is_some());
     }
 }

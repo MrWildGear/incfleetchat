@@ -4,7 +4,7 @@ use sqlx::{Pool, Sqlite};
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::analytics_types::{Catalog, RunSummary, SpawnSummary};
+use crate::analytics_types::{Catalog, EnrichmentSnapshot, RunSummary, SpawnSummary};
 use crate::spawn_parse::SpawnDraft;
 use crate::timing::{AnalyticsReport, RunSettings};
 use crate::types::AppSettings;
@@ -83,7 +83,36 @@ impl Db {
         )
         .execute(&self.pool)
         .await?;
+
+        // Recreate-safe additive migrations for older DBs created before these columns existed.
+        self.ensure_column("settings", "gamelogs_dir", "TEXT").await?;
+        self.ensure_column("settings", "fc_character", "TEXT").await?;
+        self.ensure_column("settings", "ammo_launchers", "INTEGER NOT NULL DEFAULT 6")
+            .await?;
+        self.ensure_column("settings", "ammo_per_launcher", "INTEGER NOT NULL DEFAULT 26")
+            .await?;
+        self.ensure_column("analytics_runs", "enrichment_json", "TEXT").await?;
+
         Ok(())
+    }
+
+    /// Add `column` to `table` if it doesn't already exist. SQLite has no
+    /// `ADD COLUMN IF NOT EXISTS`, so we attempt the ALTER and swallow the
+    /// "duplicate column" error on subsequent opens of an already-migrated DB.
+    async fn ensure_column(
+        &self,
+        table: &str,
+        column: &str,
+        decl: &str,
+    ) -> Result<(), sqlx::Error> {
+        let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {decl}");
+        match sqlx::query(&sql).execute(&self.pool).await {
+            Ok(_) => Ok(()),
+            Err(sqlx::Error::Database(e)) if e.message().contains("duplicate column name") => {
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn upsert_spawn(
@@ -257,28 +286,88 @@ impl Db {
     }
 
     pub async fn get_settings(&self) -> Result<AppSettings, sqlx::Error> {
-        let row: (Option<String>, Option<String>, i64) = sqlx::query_as(
-            "SELECT character, chatlogs_dir, always_on_top FROM settings WHERE id = 1",
-        )
-        .fetch_one(&self.pool)
-        .await?;
+        let row: (Option<String>, Option<String>, i64, Option<String>, Option<String>, i64, i64) =
+            sqlx::query_as(
+                "SELECT character, chatlogs_dir, always_on_top, gamelogs_dir, fc_character, \
+                 ammo_launchers, ammo_per_launcher FROM settings WHERE id = 1",
+            )
+            .fetch_one(&self.pool)
+            .await?;
         Ok(AppSettings {
             character: row.0,
             chatlogs_dir: row.1,
             always_on_top: row.2 != 0,
+            gamelogs_dir: row.3,
+            fc_character: row.4,
+            ammo_launchers: row.5,
+            ammo_per_launcher: row.6,
         })
     }
 
     pub async fn set_settings(&self, settings: &AppSettings) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE settings SET character = ?, chatlogs_dir = ?, always_on_top = ? WHERE id = 1",
+            "UPDATE settings SET character = ?, chatlogs_dir = ?, always_on_top = ?, \
+             gamelogs_dir = ?, fc_character = ?, ammo_launchers = ?, ammo_per_launcher = ? \
+             WHERE id = 1",
         )
         .bind(&settings.character)
         .bind(&settings.chatlogs_dir)
         .bind(if settings.always_on_top { 1 } else { 0 })
+        .bind(&settings.gamelogs_dir)
+        .bind(&settings.fc_character)
+        .bind(settings.ammo_launchers)
+        .bind(settings.ammo_per_launcher)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Persist an enrichment snapshot computed for a sealed run.
+    pub async fn save_enrichment(
+        &self,
+        run_id: &str,
+        snapshot: &EnrichmentSnapshot,
+    ) -> Result<(), sqlx::Error> {
+        let json = serde_json::to_string(snapshot).unwrap_or_else(|_| "null".into());
+        sqlx::query("UPDATE analytics_runs SET enrichment_json = ? WHERE run_id = ?")
+            .bind(json)
+            .bind(run_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn load_enrichment(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<EnrichmentSnapshot>, sqlx::Error> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT enrichment_json FROM analytics_runs WHERE run_id = ?")
+                .bind(run_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row
+            .and_then(|(json,)| json)
+            .and_then(|json| serde_json::from_str(&json).ok()))
+    }
+
+    /// Load the settings/report/wallet text needed to recompute enrichment
+    /// for an already-sealed run (used by the `ReenrichRun` amend).
+    pub async fn load_run_for_enrich(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<(RunSettings, AnalyticsReport, String)>, sqlx::Error> {
+        let row: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT settings_json, report_json, wallet_text FROM analytics_runs WHERE run_id = ?",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.and_then(|(settings_json, report_json, wallet_text)| {
+            let settings: RunSettings = serde_json::from_str(&settings_json).ok()?;
+            let report: AnalyticsReport = serde_json::from_str(&report_json).ok()?;
+            Some((settings, report, wallet_text))
+        }))
     }
 
     pub async fn load_ran_ids(&self) -> Result<HashSet<String>, sqlx::Error> {
@@ -352,5 +441,87 @@ mod tests {
         db.clear_site("abc123", now).await.unwrap();
         let cleared = db.load_cleared_ids().await.unwrap();
         assert!(cleared.contains("abc123"));
+    }
+
+    #[tokio::test]
+    async fn settings_gamelog_and_ammo_fields_default_and_round_trip() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let mut s = db.get_settings().await.unwrap();
+        assert_eq!(s.ammo_launchers, 6);
+        assert_eq!(s.ammo_per_launcher, 26);
+        assert!(s.gamelogs_dir.is_none());
+        assert!(s.fc_character.is_none());
+
+        s.gamelogs_dir = Some("C:/EVE/logs/Gamelogs".into());
+        s.fc_character = Some("FC Pilot".into());
+        s.ammo_launchers = 7;
+        s.ammo_per_launcher = 20;
+        db.set_settings(&s).await.unwrap();
+
+        let loaded = db.get_settings().await.unwrap();
+        assert_eq!(loaded.gamelogs_dir.as_deref(), Some("C:/EVE/logs/Gamelogs"));
+        assert_eq!(loaded.fc_character.as_deref(), Some("FC Pilot"));
+        assert_eq!(loaded.ammo_launchers, 7);
+        assert_eq!(loaded.ammo_per_launcher, 20);
+    }
+
+    #[tokio::test]
+    async fn enrichment_json_round_trips_on_saved_run() {
+        use crate::analytics_types::{
+            Diagnostic, EnrichmentSite, EnrichmentSnapshot, EnrichmentSource, EnrichmentTotals,
+            MissileStat,
+        };
+        use crate::timing::{build_report, RunSettings};
+
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let settings = RunSettings::default();
+        let report = build_report(&[], &settings);
+        db.upsert_spawn("4MY-AB", None).await.unwrap();
+        db.save_run("run-1", "4MY-AB", &settings, "wallet", "manifest", &report)
+            .await
+            .unwrap();
+
+        assert!(db.load_enrichment("run-1").await.unwrap().is_none());
+
+        let snapshot = EnrichmentSnapshot {
+            resolved_fc: Some("FC Pilot".into()),
+            listeners: vec!["FC Pilot".into()],
+            diagnostics: vec![Diagnostic {
+                level: "info".into(),
+                message: "ok".into(),
+            }],
+            sites: vec![EnrichmentSite {
+                occurred_at: Utc::now(),
+                warp_seconds: 10,
+                in_site_seconds: 20,
+                is_break: false,
+                source: EnrichmentSource::Fc,
+            }],
+            missiles: vec![MissileStat {
+                listener: "FC Pilot".into(),
+                reload_cycles: 1,
+                hits: 5,
+                missiles_per_cycle: 156,
+                dead: 151,
+            }],
+            totals: EnrichmentTotals {
+                warp_seconds: 10,
+                in_site_seconds: 20,
+                avg_in_site_seconds: Some(20.0),
+                fleet_dead: 151,
+            },
+        };
+        db.save_enrichment("run-1", &snapshot).await.unwrap();
+
+        let loaded = db.load_enrichment("run-1").await.unwrap().unwrap();
+        assert_eq!(loaded, snapshot);
+
+        let (loaded_settings, loaded_report, wallet_text) =
+            db.load_run_for_enrich("run-1").await.unwrap().unwrap();
+        assert_eq!(loaded_settings.fleet_size, settings.fleet_size);
+        assert_eq!(loaded_report.session.sites_ran, 0);
+        assert_eq!(wallet_text, "wallet");
     }
 }

@@ -79,6 +79,22 @@ pub fn parse_wallet_journal(text: &str, expected_isk: i64) -> WalletParseResult 
     out
 }
 
+/// Best-effort FC-name hint from a Corporate Reward Payout description, e.g.
+/// `"CONCORD rewarded tomar norris for services performed."` → `Some("tomar norris")`.
+pub fn extract_wallet_fc_hint(description: &str) -> Option<String> {
+    let prefix = "CONCORD rewarded ";
+    let suffix = " for services performed";
+    let start = description.find(prefix)? + prefix.len();
+    let rest = &description[start..];
+    let end = rest.find(suffix)?;
+    let name = rest[..end].trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +124,19 @@ mod tests {
         let r = parse_wallet_journal(&text, 15_000_000);
         assert_eq!(r.events.len(), 2);
         assert_eq!(r.duplicates_dropped, 1);
+    }
+
+    #[test]
+    fn extracts_fc_hint_from_concord_rewarded_description() {
+        assert_eq!(
+            extract_wallet_fc_hint("CONCORD rewarded tomar norris for services performed."),
+            Some("tomar norris".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_fc_hint_returns_none_for_unrelated_description() {
+        assert_eq!(extract_wallet_fc_hint("noise"), None);
+        assert_eq!(extract_wallet_fc_hint(""), None);
     }
 }

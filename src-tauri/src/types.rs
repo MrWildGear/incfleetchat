@@ -40,11 +40,29 @@ pub struct Board {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppSettings {
     pub character: Option<String>,
     pub chatlogs_dir: Option<String>,
     pub always_on_top: bool,
+    pub gamelogs_dir: Option<String>,
+    pub fc_character: Option<String>,
+    pub ammo_launchers: i64,
+    pub ammo_per_launcher: i64,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            character: None,
+            chatlogs_dir: None,
+            always_on_top: false,
+            gamelogs_dir: None,
+            fc_character: None,
+            ammo_launchers: 6,
+            ammo_per_launcher: 26,
+        }
+    }
 }
 
 /// Parsed tag candidate before Ran merge / phase computation.
