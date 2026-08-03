@@ -86,6 +86,41 @@ export type SpawnDraft = {
   title: string | null;
 };
 
+export type EnrichmentSource = "fc" | "borrowed" | "heuristic";
+
+export type EnrichmentSite = {
+  occurred_at: string;
+  warp_seconds: number;
+  in_site_seconds: number;
+  is_break: boolean;
+  source: EnrichmentSource;
+};
+
+export type MissileStat = {
+  listener: string;
+  reload_cycles: number;
+  hits: number;
+  missiles_per_cycle: number;
+  dead: number;
+};
+
+export type EnrichmentTotals = {
+  warp_seconds: number;
+  in_site_seconds: number;
+  avg_in_site_seconds: number | null;
+  fleet_dead: number;
+};
+
+export type EnrichmentSnapshot = {
+  resolved_fc: string | null;
+  /** Listener headers used (all listeners with logs in range). */
+  listeners: string[];
+  diagnostics: { level: string; message: string }[];
+  sites: EnrichmentSite[];
+  missiles: MissileStat[];
+  totals: EnrichmentTotals;
+};
+
 export type EditionFocus = {
   trays: {
     manifest: string;
@@ -99,6 +134,7 @@ export type EditionFocus = {
   diagnostics: { level: string; message: string }[];
   session_settings: RunSettings;
   staging_spawn: SpawnDraft | null;
+  enrichment: EnrichmentSnapshot | null;
 };
 
 export type PayoutTicket = { isk: number; lp_per_char: number };

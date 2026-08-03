@@ -3,12 +3,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { computeAmmoLoad } from "../lib/ammo";
 import type {
   EditionFocus,
+  EnrichmentSite,
   PayoutTicket,
   ReportScope,
   RunSettings,
   SpaceBand,
 } from "../lib/analyticsTypes";
 import { cn } from "../lib/utils";
+
+type ToolsSettings = {
+  gamelogs_dir: string | null;
+  fc_character: string | null;
+};
 
 type Tab = "analytics" | "ammo";
 
@@ -43,6 +49,8 @@ export function ToolsApp() {
   const [walletPaste, setWalletPaste] = useState("");
   const [walletBuffer, setWalletBuffer] = useState("");
   const [showDrilldown, setShowDrilldown] = useState(false);
+  const [gamelogsPath, setGamelogsPath] = useState("");
+  const [fcCharacter, setFcCharacter] = useState("");
   const walletRef = useRef<HTMLTextAreaElement>(null);
 
   const [settings, setSettings] = useState<RunSettings>({
@@ -80,7 +88,45 @@ export function ToolsApp() {
     void invoke<EditionFocus>("run_desk_open")
       .then(applyFocus)
       .catch((e: unknown) => setError(String(e)));
+    void invoke<ToolsSettings>("get_settings").then((s) => {
+      setGamelogsPath(s.gamelogs_dir ?? "");
+      setFcCharacter(s.fc_character ?? "");
+    });
   }, [applyFocus]);
+
+  async function persistToolsSettings() {
+    try {
+      await invoke("set_settings", {
+        patch: {
+          gamelogs_dir: gamelogsPath.trim() || null,
+          fc_character: fcCharacter.trim() || null,
+        },
+      });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function syncAmmoSettings() {
+    await invoke("set_settings", {
+      patch: {
+        ammo_launchers: ammo.launchers,
+        ammo_per_launcher: ammo.ammoPerLauncher,
+      },
+    });
+  }
+
+  async function reenrich() {
+    try {
+      await persistToolsSettings();
+      await syncAmmoSettings();
+      const runId = focus?.scope.kind === "run" ? focus.scope.run_id : undefined;
+      const f = await invoke<EditionFocus>("run_desk_reenrich", { runId });
+      applyFocus(f);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   async function syncSettings(next: RunSettings) {
     setSettings(next);
@@ -142,6 +188,7 @@ export function ToolsApp() {
   async function analyze() {
     try {
       await syncSettings(settings);
+      await syncAmmoSettings();
       const f = await invoke<EditionFocus>("run_desk_analyze");
       applyFocus(f);
     } catch (e) {
@@ -163,6 +210,11 @@ export function ToolsApp() {
   }
 
   const session = focus?.report?.session;
+  const enrichmentByTime = useMemo(() => {
+    const map = new Map<string, EnrichmentSite>();
+    for (const s of focus?.enrichment?.sites ?? []) map.set(s.occurred_at, s);
+    return map;
+  }, [focus?.enrichment]);
 
   return (
     <div className="flex h-full flex-col bg-surface text-fg">
@@ -348,6 +400,26 @@ export function ToolsApp() {
                 placeholder="4MY-AB"
               />
             </label>
+            <label className="text-xs text-muted">
+              Gamelogs path
+              <input
+                className="ml-2 w-56 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
+                value={gamelogsPath}
+                onChange={(e) => setGamelogsPath(e.target.value)}
+                onBlur={() => void persistToolsSettings()}
+                placeholder="Documents\EVE\logs\Gamelogs"
+              />
+            </label>
+            <label className="text-xs text-muted">
+              FC character
+              <input
+                className="ml-2 w-32 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
+                value={fcCharacter}
+                onChange={(e) => setFcCharacter(e.target.value)}
+                onBlur={() => void persistToolsSettings()}
+                placeholder="FC Pilot"
+              />
+            </label>
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">
@@ -445,19 +517,29 @@ export function ToolsApp() {
 
           <div className="flex shrink-0 items-center justify-between gap-2">
             <h2 className="text-xs font-semibold text-muted">Results</h2>
-            <button
-              type="button"
-              disabled={!focus?.report?.sites?.length}
-              onClick={() => setShowDrilldown((v) => !v)}
-              className={cn(
-                "rounded border px-2 py-1 text-xs",
-                focus?.report?.sites?.length
-                  ? "border-accent/40 text-accent hover:bg-accent/10"
-                  : "cursor-not-allowed border-border text-muted/40",
-              )}
-            >
-              {showDrilldown ? "Hide site list" : "Per-site drill-down"}
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void reenrich()}
+                className="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent hover:bg-accent/20"
+                title="Recompute warp/in-site and dead missiles from gamelogs"
+              >
+                Re-enrich
+              </button>
+              <button
+                type="button"
+                disabled={!focus?.report?.sites?.length}
+                onClick={() => setShowDrilldown((v) => !v)}
+                className={cn(
+                  "rounded border px-2 py-1 text-xs",
+                  focus?.report?.sites?.length
+                    ? "border-accent/40 text-accent hover:bg-accent/10"
+                    : "cursor-not-allowed border-border text-muted/40",
+                )}
+              >
+                {showDrilldown ? "Hide site list" : "Per-site drill-down"}
+              </button>
+            </div>
           </div>
 
           <div className="grid max-h-[40vh] shrink-0 gap-3 lg:grid-cols-[1fr_280px]">
@@ -545,8 +627,61 @@ export function ToolsApp() {
               ) : (
                 <p className="text-muted">No aggregate for this scope.</p>
               )}
+              {focus?.enrichment && (
+                <>
+                  <div className="my-1 border-t border-border pt-1" />
+                  <h2 className="font-semibold">Gamelog enrichment</h2>
+                  <Row
+                    label="Resolved FC"
+                    value={focus.enrichment.resolved_fc ?? "—"}
+                  />
+                  <Row
+                    label="Warp time"
+                    value={formatDuration(focus.enrichment.totals.warp_seconds)}
+                  />
+                  <Row
+                    label="In-site time"
+                    value={formatDuration(focus.enrichment.totals.in_site_seconds)}
+                  />
+                  <Row
+                    label="Avg in-site"
+                    value={formatDuration(focus.enrichment.totals.avg_in_site_seconds)}
+                  />
+                  <Row
+                    label="Dead missiles"
+                    value={String(focus.enrichment.totals.fleet_dead)}
+                  />
+                </>
+              )}
             </aside>
           </div>
+
+          {focus?.enrichment?.missiles?.length ? (
+            <div className="shrink-0 overflow-auto rounded border border-border">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-surface-raised text-muted">
+                  <tr>
+                    <th className="px-2 py-1">Listener</th>
+                    <th className="px-2 py-1">Reload cycles</th>
+                    <th className="px-2 py-1">Hits</th>
+                    <th className="px-2 py-1">Missiles/cycle</th>
+                    <th className="px-2 py-1">Dead</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {focus.enrichment.missiles.map((m) => (
+                    <tr key={m.listener} className="border-t border-border">
+                      <td className="px-2 py-1">{m.listener}</td>
+                      <td className="px-2 py-1">{m.reload_cycles}</td>
+                      <td className="px-2 py-1">{m.hits}</td>
+                      <td className="px-2 py-1">{m.missiles_per_cycle}</td>
+                      <td className="px-2 py-1">{m.dead}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
 
           {showDrilldown && focus?.report?.sites?.length ? (
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-border">
@@ -572,23 +707,36 @@ export function ToolsApp() {
                       <th className="px-2 py-1">Break?</th>
                       <th className="px-2 py-1">ISK</th>
                       <th className="px-2 py-1">LP</th>
+                      <th className="px-2 py-1">Warp</th>
+                      <th className="px-2 py-1">In-site</th>
+                      <th className="px-2 py-1">Source</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {focus.report.sites.map((s, i) => (
-                      <tr key={i} className="border-t border-border">
-                        <td className="px-2 py-1">
-                          {new Date(s.occurred_at).toLocaleString()}
-                        </td>
-                        <td className="px-2 py-1">{formatDuration(s.gap_seconds)}</td>
-                        <td className="px-2 py-1">
-                          {formatDuration(s.duration_seconds)}
-                        </td>
-                        <td className="px-2 py-1">{s.is_break ? "yes" : ""}</td>
-                        <td className="px-2 py-1">{formatIsk(s.amount_isk)}</td>
-                        <td className="px-2 py-1">{formatIsk(s.fleet_lp)}</td>
-                      </tr>
-                    ))}
+                    {focus.report.sites.map((s, i) => {
+                      const e = enrichmentByTime.get(s.occurred_at);
+                      return (
+                        <tr key={i} className="border-t border-border">
+                          <td className="px-2 py-1">
+                            {new Date(s.occurred_at).toLocaleString()}
+                          </td>
+                          <td className="px-2 py-1">{formatDuration(s.gap_seconds)}</td>
+                          <td className="px-2 py-1">
+                            {formatDuration(s.duration_seconds)}
+                          </td>
+                          <td className="px-2 py-1">{s.is_break ? "yes" : ""}</td>
+                          <td className="px-2 py-1">{formatIsk(s.amount_isk)}</td>
+                          <td className="px-2 py-1">{formatIsk(s.fleet_lp)}</td>
+                          <td className="px-2 py-1">
+                            {e ? formatDuration(e.warp_seconds) : "—"}
+                          </td>
+                          <td className="px-2 py-1">
+                            {e ? formatDuration(e.in_site_seconds) : "—"}
+                          </td>
+                          <td className="px-2 py-1">{e ? e.source : "—"}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
