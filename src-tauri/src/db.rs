@@ -42,6 +42,17 @@ impl ReportRows {
     }
 }
 
+/// Result of attempting to load a run's persisted `enrichment_json`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnrichmentLoad {
+    /// No `enrichment_json` stored for this run (never enriched).
+    Missing,
+    /// JSON present but does not deserialize into the current
+    /// `EnrichmentSnapshot` shape (pre-combat→payout schema).
+    Stale,
+    Ok(EnrichmentSnapshot),
+}
+
 fn parse_report(run_id: &str, json: &str) -> Option<AnalyticsReport> {
     match serde_json::from_str(json) {
         Ok(report) => Some(report),
@@ -372,18 +383,49 @@ impl Db {
         Ok(())
     }
 
-    pub async fn load_enrichment(
+    /// Load `run_id`'s enrichment, distinguishing "never enriched" from
+    /// "enriched under an older schema and needs Re-enrich" so the caller
+    /// can surface the right diagnostic for each.
+    pub async fn load_enrichment_status(
         &self,
         run_id: &str,
-    ) -> Result<Option<EnrichmentSnapshot>, sqlx::Error> {
+    ) -> Result<EnrichmentLoad, sqlx::Error> {
         let row: Option<(Option<String>,)> =
             sqlx::query_as("SELECT enrichment_json FROM analytics_runs WHERE run_id = ?")
                 .bind(run_id)
                 .fetch_optional(&self.pool)
                 .await?;
-        Ok(row
-            .and_then(|(json,)| json)
-            .and_then(|json| serde_json::from_str(&json).ok()))
+        Ok(match row.and_then(|(json,)| json) {
+            None => EnrichmentLoad::Missing,
+            Some(json) => match serde_json::from_str::<EnrichmentSnapshot>(&json) {
+                Ok(snapshot) => EnrichmentLoad::Ok(snapshot),
+                Err(_) => EnrichmentLoad::Stale,
+            },
+        })
+    }
+
+    /// Run ids for a spawn, oldest first (latest last) — the order
+    /// `aggregate_enrichments` expects so "latest wins" merges behave.
+    pub async fn list_run_ids_for_spawn(
+        &self,
+        constellation: &str,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT run_id FROM analytics_runs WHERE constellation = ? ORDER BY saved_at ASC",
+        )
+        .bind(constellation)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// All run ids, oldest first (latest last). See `list_run_ids_for_spawn`.
+    pub async fn list_all_run_ids(&self) -> Result<Vec<String>, sqlx::Error> {
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT run_id FROM analytics_runs ORDER BY saved_at ASC")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
     /// Load the settings/report/wallet text needed to recompute enrichment
@@ -602,7 +644,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(db.load_enrichment("run-1").await.unwrap().is_none());
+        assert_eq!(
+            db.load_enrichment_status("run-1").await.unwrap(),
+            EnrichmentLoad::Missing
+        );
 
         let snapshot = EnrichmentSnapshot {
             resolved_fc: Some("FC Pilot".into()),
@@ -634,7 +679,10 @@ mod tests {
         };
         db.save_enrichment("run-1", &snapshot).await.unwrap();
 
-        let loaded = db.load_enrichment("run-1").await.unwrap().unwrap();
+        let loaded = match db.load_enrichment_status("run-1").await.unwrap() {
+            EnrichmentLoad::Ok(snapshot) => snapshot,
+            other => panic!("expected EnrichmentLoad::Ok, got {other:?}"),
+        };
         assert_eq!(loaded, snapshot);
 
         let (loaded_settings, loaded_report, wallet_text) =
@@ -642,6 +690,47 @@ mod tests {
         assert_eq!(loaded_settings.fleet_size, settings.fleet_size);
         assert_eq!(loaded_report.session.sites_ran, 0);
         assert_eq!(wallet_text, "wallet");
+    }
+
+    #[tokio::test]
+    async fn load_enrichment_status_distinguishes_missing_from_stale() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let settings = RunSettings::default();
+        let report = build_report(&[], &settings);
+        db.upsert_spawn("4MY-AB", None).await.unwrap();
+        db.save_run("run-missing", "4MY-AB", &settings, "wallet", "manifest", &report)
+            .await
+            .unwrap();
+        db.save_run("run-stale", "4MY-AB", &settings, "wallet", "manifest", &report)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.load_enrichment_status("run-missing").await.unwrap(),
+            EnrichmentLoad::Missing
+        );
+
+        // Pre-combat→payout schema: `in_site_seconds` instead of
+        // `combat_to_payout_seconds` — deserialize must fail.
+        sqlx::query("UPDATE analytics_runs SET enrichment_json = ? WHERE run_id = ?")
+            .bind(
+                r#"{"resolved_fc":null,"listeners":[],"diagnostics":[],"sites":[],"missiles":[],"totals":{"warp_seconds":0,"in_site_seconds":0,"fleet_dead":0}}"#,
+            )
+            .bind("run-stale")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.load_enrichment_status("run-stale").await.unwrap(),
+            EnrichmentLoad::Stale
+        );
+
+        let ids = db.list_run_ids_for_spawn("4MY-AB").await.unwrap();
+        assert_eq!(ids, vec!["run-missing".to_string(), "run-stale".to_string()]);
+        let all_ids = db.list_all_run_ids().await.unwrap();
+        assert_eq!(all_ids, ids);
     }
 
     use crate::timing::{build_report, RunSettings};
