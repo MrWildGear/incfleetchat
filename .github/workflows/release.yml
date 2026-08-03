@@ -61,10 +61,13 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
       - name: Sync version from VERSION
         run: npm run sync-version
+
+      - name: Run tests
+        run: npx vitest run
 
       - name: Detect pre-release
         id: version
