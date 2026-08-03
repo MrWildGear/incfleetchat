@@ -116,11 +116,13 @@ Filter with existing `hasMissileActivity`. Format percentages to **one decimal**
 
 | Level | Content |
 |-------|---------|
-| 0 | Existing site timing table; rows clickable when `scope.kind === "run"` and enrichment present |
+| 0 | Existing site timing table; rows clickable when `scope.kind === "run"`, enrichment present, and the site’s `missiles` is non-empty |
 | 1 | Site totals: Reload cycles, Hits, Dead cycles, Dead missiles, Hit %, Miss %; Back → 0; open listeners → 2 |
 | 2 | Per-listener table for that site (same columns as Listeners); Back → 1 |
 
-Break sites: not clickable for missile layers (or show timing-only with no missile stats).
+**Level 1 aggregation:** same rule as fleet Summary — sum base counts (`reload_cycles`, `hits`, `dead`, per-listener `expended` / `dead_cycles`), then derive Hit % / Miss % from **summed** hits and expended (do not average per-listener percentages).
+
+Sites with empty `missiles` (breaks and unalignable first sites) are **not clickable** for missile layers; they remain visible in the level-0 timing table only.
 
 **Overall / Spawn:** flat timing table only; Listeners + Summary still show aggregated run-level missile metrics when enrichment exists.
 
