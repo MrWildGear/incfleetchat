@@ -779,7 +779,7 @@ export function ToolsApp() {
                   />
                   <Row
                     label="Warp time"
-                    value={formatDuration(focus.enrichment.totals.warp_seconds)}
+                    value={formatDuration(focus.enrichment.totals.approach_seconds)}
                   />
                   <Row
                     label="Combat→payout"
@@ -949,7 +949,7 @@ export function ToolsApp() {
                           <td className="px-2 py-1">{formatIskMoney(s.amount_isk)}</td>
                           <td className="px-2 py-1">{formatLp(s.fleet_lp)}</td>
                           <td className="px-2 py-1">
-                            {e ? formatDuration(e.warp_seconds) : "—"}
+                            {e ? formatDuration(e.approach_seconds) : "—"}
                           </td>
                           <td className="px-2 py-1">
                             {e ? formatDuration(e.combat_to_payout_seconds) : "—"}

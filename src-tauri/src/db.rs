@@ -658,7 +658,7 @@ mod tests {
             }],
             sites: vec![EnrichmentSite {
                 occurred_at: Utc::now(),
-                warp_seconds: 10,
+                approach_seconds: Some(10),
                 combat_to_payout_seconds: Some(20),
                 is_break: false,
                 source: EnrichmentSource::Fc,
@@ -671,7 +671,7 @@ mod tests {
                 dead: 151,
             }],
             totals: EnrichmentTotals {
-                warp_seconds: 10,
+                approach_seconds: Some(10),
                 combat_to_payout_seconds: Some(20),
                 avg_combat_to_payout_seconds: Some(20.0),
                 fleet_dead: 151,
@@ -715,7 +715,7 @@ mod tests {
         // `combat_to_payout_seconds` — deserialize must fail.
         sqlx::query("UPDATE analytics_runs SET enrichment_json = ? WHERE run_id = ?")
             .bind(
-                r#"{"resolved_fc":null,"listeners":[],"diagnostics":[],"sites":[],"missiles":[],"totals":{"warp_seconds":0,"in_site_seconds":0,"fleet_dead":0}}"#,
+                r#"{"resolved_fc":null,"listeners":[],"diagnostics":[],"sites":[],"missiles":[],"totals":{"approach_seconds":0,"in_site_seconds":0,"fleet_dead":0}}"#,
             )
             .bind("run-stale")
             .execute(&db.pool)

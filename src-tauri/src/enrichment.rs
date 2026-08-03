@@ -329,7 +329,7 @@ pub fn enrich_run(
             // from warp/combat→payout averages here.
             sites.push(EnrichmentSite {
                 occurred_at,
-                warp_seconds: 0,
+                approach_seconds: None,
                 combat_to_payout_seconds: None,
                 is_break: false,
                 source: EnrichmentSource::Heuristic,
@@ -351,7 +351,7 @@ pub fn enrich_run(
 
         sites.push(EnrichmentSite {
             occurred_at,
-            warp_seconds,
+            approach_seconds: Some(warp_seconds),
             combat_to_payout_seconds,
             is_break,
             source,
@@ -361,7 +361,11 @@ pub fn enrich_run(
     let missiles = missile_stats(logs, missiles_per_cycle);
     let fleet_dead: u32 = missiles.iter().map(|m| m.dead).sum();
 
-    let total_warp: i64 = counted.iter().map(|(w, _)| w).sum();
+    let total_approach: Option<i64> = if counted.is_empty() {
+        None
+    } else {
+        Some(counted.iter().map(|(w, _)| w).sum())
+    };
     let combat_values: Vec<i64> = counted
         .iter()
         .filter_map(|(_, c)| *c)
@@ -384,7 +388,7 @@ pub fn enrich_run(
         sites,
         missiles,
         totals: EnrichmentTotals {
-            warp_seconds: total_warp,
+            approach_seconds: total_approach,
             combat_to_payout_seconds: total_combat,
             avg_combat_to_payout_seconds,
             fleet_dead,
@@ -449,7 +453,7 @@ mod tests {
         assert_eq!(snap.resolved_fc.as_deref(), Some("FC Pilot"));
         assert_eq!(snap.sites.len(), 2);
         let site = &snap.sites[1];
-        assert_eq!(site.warp_seconds, 130);
+        assert_eq!(site.approach_seconds, Some(130));
         assert_eq!(site.combat_to_payout_seconds, Some(330));
         assert_eq!(site.source, EnrichmentSource::Fleet);
         assert!(!site.is_break);
@@ -465,7 +469,7 @@ mod tests {
 
         let site = &snap.sites[1];
         assert!(site.is_break);
-        assert_eq!(site.warp_seconds, 0);
+        assert_eq!(site.approach_seconds, Some(0));
         assert_eq!(site.combat_to_payout_seconds, None);
         assert_eq!(site.source, EnrichmentSource::Heuristic);
     }
@@ -480,7 +484,7 @@ mod tests {
 
         let site = &snap.sites[1];
         assert!(!site.is_break);
-        assert_eq!(site.warp_seconds, 0);
+        assert_eq!(site.approach_seconds, Some(0));
         assert_eq!(site.combat_to_payout_seconds, None);
         assert_eq!(site.source, EnrichmentSource::Heuristic);
     }
@@ -498,7 +502,7 @@ mod tests {
 
         let site = &snap.sites[1];
         assert!(!site.is_break);
-        assert_eq!(site.warp_seconds, 0);
+        assert_eq!(site.approach_seconds, Some(0));
         assert_eq!(site.combat_to_payout_seconds, Some(240));
         assert_eq!(site.source, EnrichmentSource::Heuristic);
     }
@@ -544,17 +548,17 @@ mod tests {
         let snap = enrich_run(&logs, &sites, 25, None, 156, Some("FC Pilot"), None);
 
         let first = &snap.sites[0];
-        assert_eq!(first.warp_seconds, 0);
+        assert_eq!(first.approach_seconds, Some(0));
         assert_eq!(first.combat_to_payout_seconds, None);
         assert!(!first.is_break);
 
         let second = &snap.sites[1];
-        assert_eq!(second.warp_seconds, 120);
+        assert_eq!(second.approach_seconds, Some(120));
         assert_eq!(second.combat_to_payout_seconds, Some(480));
 
         // Averages must only reflect the second (alignable) site.
         assert_eq!(snap.totals.avg_combat_to_payout_seconds, Some(480.0));
-        assert_eq!(snap.totals.warp_seconds, 120);
+        assert_eq!(snap.totals.approach_seconds, Some(120));
         assert_eq!(snap.totals.combat_to_payout_seconds, Some(480));
     }
 
@@ -617,7 +621,7 @@ mod tests {
 
         let site = &snap.sites[1];
         // Warp legs: 20:01→20:02 (60s) and 20:05→20:06:30 (90s).
-        assert_eq!(site.warp_seconds, 150);
+        assert_eq!(site.approach_seconds, Some(150));
         // clear_start = end of last warp segment (20:06:30); the CombatHit
         // that ended that segment is itself the first combat → payout 90s.
         assert_eq!(site.combat_to_payout_seconds, Some(90));
@@ -643,7 +647,7 @@ mod tests {
 
         let site = &snap.sites[1];
         assert!(!site.is_break);
-        assert_eq!(site.warp_seconds, 180);
+        assert_eq!(site.approach_seconds, Some(180));
         assert_eq!(site.combat_to_payout_seconds, Some(32 * 60));
     }
 
@@ -676,7 +680,7 @@ mod tests {
         );
 
         let site = &snap.sites[1];
-        assert_eq!(site.warp_seconds, 130);
+        assert_eq!(site.approach_seconds, Some(130));
         assert_eq!(site.combat_to_payout_seconds, Some(300));
         assert_eq!(site.source, EnrichmentSource::Fleet);
         assert!(!site.is_break);
@@ -707,7 +711,7 @@ mod tests {
         let snap = enrich_run(&logs, &sites, 25, Some(ts(19, 55, 0)), 156, Some("FC Pilot"), None);
         let site = &snap.sites[1];
         assert!(!site.is_break);
-        assert_eq!(site.warp_seconds, 60);
+        assert_eq!(site.approach_seconds, Some(60));
         assert_eq!(site.combat_to_payout_seconds, None);
     }
 
@@ -729,7 +733,7 @@ mod tests {
         let snap = enrich_run(&logs, &sites, 25, None, 156, Some("FC Pilot"), None);
 
         let first = &snap.sites[0];
-        assert_eq!(first.warp_seconds, 0);
+        assert_eq!(first.approach_seconds, Some(0));
         assert_eq!(first.combat_to_payout_seconds, None);
         assert!(!first.is_break);
     }
@@ -759,7 +763,7 @@ mod tests {
             None,
         );
         let site = &snap.sites[1];
-        assert_eq!(site.warp_seconds, 90);
+        assert_eq!(site.approach_seconds, Some(90));
         assert_eq!(site.combat_to_payout_seconds, Some(300));
         assert_eq!(site.source, EnrichmentSource::Fleet);
     }
@@ -792,7 +796,7 @@ mod tests {
             None,
         );
         let site = &snap.sites[1];
-        assert_eq!(site.warp_seconds, 130);
+        assert_eq!(site.approach_seconds, Some(130));
         assert_eq!(site.combat_to_payout_seconds, Some(300));
         assert_eq!(site.source, EnrichmentSource::Fleet);
     }
@@ -817,7 +821,7 @@ mod tests {
             None,
         );
         let site = &snap.sites[1];
-        assert_eq!(site.warp_seconds, 60);
+        assert_eq!(site.approach_seconds, Some(60));
         assert_eq!(site.combat_to_payout_seconds, None);
         assert_eq!(site.source, EnrichmentSource::Fleet);
     }
@@ -845,7 +849,7 @@ mod tests {
             None,
         );
         let site = &snap.sites[1];
-        assert_eq!(site.warp_seconds, 60);
+        assert_eq!(site.approach_seconds, Some(60));
         assert_eq!(site.combat_to_payout_seconds, Some(300));
         assert_eq!(site.source, EnrichmentSource::Fleet);
     }
@@ -874,7 +878,7 @@ mod tests {
         );
         let site = &snap.sites[1];
         // 5s + 25s = 30s warp
-        assert_eq!(site.warp_seconds, 30);
+        assert_eq!(site.approach_seconds, Some(30));
         assert_eq!(site.combat_to_payout_seconds, Some(180)); // 20:05 - 20:02
         assert_eq!(site.source, EnrichmentSource::Fleet);
     }

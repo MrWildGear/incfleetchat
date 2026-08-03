@@ -105,7 +105,7 @@ pub enum EnrichmentSource {
 #[serde(deny_unknown_fields)]
 pub struct EnrichmentSite {
     pub occurred_at: DateTime<Utc>,
-    pub warp_seconds: i64,
+    pub approach_seconds: Option<i64>,
     pub combat_to_payout_seconds: Option<i64>,
     pub is_break: bool,
     pub source: EnrichmentSource,
@@ -123,7 +123,7 @@ pub struct MissileStat {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EnrichmentTotals {
-    pub warp_seconds: i64,
+    pub approach_seconds: Option<i64>,
     pub combat_to_payout_seconds: Option<i64>,
     pub avg_combat_to_payout_seconds: Option<f64>,
     pub fleet_dead: u32,
@@ -153,14 +153,14 @@ mod tests {
             "diagnostics": [],
             "sites": [{
                 "occurred_at": "2026-01-01T00:00:00Z",
-                "warp_seconds": 10,
+                "approach_seconds": 10,
                 "in_site_seconds": 330,
                 "is_break": false,
                 "source": "fc"
             }],
             "missiles": [],
             "totals": {
-                "warp_seconds": 10,
+                "approach_seconds": 10,
                 "fleet_dead": 0
             }
         }"#;

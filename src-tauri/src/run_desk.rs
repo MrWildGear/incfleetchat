@@ -651,11 +651,18 @@ pub fn aggregate_enrichments(
     // Same totals rule as `enrich_run`: warp sums non-break sites; combat
     // total/avg only cover measurable (`Some`) sites and are `None` when
     // there are zero of those.
-    let warp_seconds: i64 = sites
-        .iter()
-        .filter(|s| !s.is_break)
-        .map(|s| s.warp_seconds)
-        .sum();
+    let approach_seconds: Option<i64> = {
+        let values: Vec<i64> = sites
+            .iter()
+            .filter(|s| !s.is_break)
+            .filter_map(|s| s.approach_seconds)
+            .collect();
+        if values.is_empty() {
+            None
+        } else {
+            Some(values.iter().sum())
+        }
+    };
     let combat_values: Vec<i64> = sites
         .iter()
         .filter(|s| !s.is_break)
@@ -680,7 +687,7 @@ pub fn aggregate_enrichments(
         sites,
         missiles,
         totals: EnrichmentTotals {
-            warp_seconds,
+            approach_seconds,
             combat_to_payout_seconds,
             avg_combat_to_payout_seconds,
             fleet_dead,
@@ -695,10 +702,10 @@ mod tests {
     use chrono::TimeZone;
     use tempfile::tempdir;
 
-    fn site(occurred_at: DateTime<Utc>, warp: i64, combat: Option<i64>, is_break: bool) -> EnrichmentSite {
+    fn site(occurred_at: DateTime<Utc>, approach: i64, combat: Option<i64>, is_break: bool) -> EnrichmentSite {
         EnrichmentSite {
             occurred_at,
-            warp_seconds: warp,
+            approach_seconds: Some(approach),
             combat_to_payout_seconds: combat,
             is_break,
             source: EnrichmentSource::Fc,
@@ -723,7 +730,7 @@ mod tests {
             sites: Vec::new(),
             missiles: Vec::new(),
             totals: EnrichmentTotals {
-                warp_seconds: 0,
+                approach_seconds: None,
                 combat_to_payout_seconds: None,
                 avg_combat_to_payout_seconds: None,
                 fleet_dead: 0,
@@ -757,7 +764,7 @@ mod tests {
         assert_eq!(a.missiles_per_cycle, 200);
 
         assert_eq!(aggregate.sites.len(), 2);
-        assert_eq!(aggregate.totals.warp_seconds, 100);
+        assert_eq!(aggregate.totals.approach_seconds, Some(100));
         assert_eq!(aggregate.totals.combat_to_payout_seconds, Some(200));
         assert_eq!(aggregate.totals.avg_combat_to_payout_seconds, Some(100.0));
         assert_eq!(aggregate.totals.fleet_dead, 12);
@@ -784,7 +791,7 @@ mod tests {
         let aggregate = aggregate_enrichments(&runs, 2);
 
         assert_eq!(aggregate.listeners, vec!["A".to_string(), "B".to_string()]);
-        assert_eq!(aggregate.totals.warp_seconds, 30);
+        assert_eq!(aggregate.totals.approach_seconds, Some(30));
         assert_eq!(aggregate.totals.combat_to_payout_seconds, Some(60));
         assert_eq!(aggregate.totals.avg_combat_to_payout_seconds, Some(60.0));
         assert_eq!(aggregate.totals.fleet_dead, 5);
@@ -985,7 +992,7 @@ Immensea
         assert_eq!(enrichment.resolved_fc.as_deref(), Some("FC Pilot"));
         assert_eq!(enrichment.sites.len(), 2);
         assert_eq!(enrichment.sites[1].source, EnrichmentSource::Fleet);
-        assert_eq!(enrichment.sites[1].warp_seconds, 90);
+        assert_eq!(enrichment.sites[1].approach_seconds, Some(90));
         assert_eq!(enrichment.sites[1].combat_to_payout_seconds, Some(180));
 
         // Files the scan had to skip are reported on the snapshot.
@@ -1175,7 +1182,7 @@ Immensea
         snap1.sites = vec![site(t0, 60, Some(90), false)];
         snap1.missiles = vec![missile("Alt", 1, 10, 156, 5)];
         snap1.totals = EnrichmentTotals {
-            warp_seconds: 60,
+            approach_seconds: Some(60),
             combat_to_payout_seconds: Some(90),
             avg_combat_to_payout_seconds: Some(90.0),
             fleet_dead: 5,
@@ -1186,7 +1193,7 @@ Immensea
         snap2.sites = vec![site(t1, 40, Some(70), false)];
         snap2.missiles = vec![missile("Alt", 2, 20, 200, 7)];
         snap2.totals = EnrichmentTotals {
-            warp_seconds: 40,
+            approach_seconds: Some(40),
             combat_to_payout_seconds: Some(70),
             avg_combat_to_payout_seconds: Some(70.0),
             fleet_dead: 7,
@@ -1215,7 +1222,7 @@ Immensea
         assert_eq!(alt.dead, 12);
         assert_eq!(alt.missiles_per_cycle, 200);
         assert_eq!(aggregate.sites.len(), 2);
-        assert_eq!(aggregate.totals.warp_seconds, 100);
+        assert_eq!(aggregate.totals.approach_seconds, Some(100));
         assert_eq!(aggregate.totals.combat_to_payout_seconds, Some(160));
         assert_eq!(aggregate.totals.fleet_dead, 12);
         assert!(
