@@ -1,8 +1,21 @@
 import { useEffect } from "react";
 import { useAppStore } from "../store";
 import { cn } from "../lib/utils";
+import { formatAppVersionLabel, type ManualCheckOutcome } from "../lib/updateUx";
 
-export function SettingsPanel() {
+type SettingsPanelProps = {
+  appVersion: string | null;
+  checkManual: () => Promise<void>;
+  checkingManual: boolean;
+  manualResult: ManualCheckOutcome | null;
+};
+
+export function SettingsPanel({
+  appVersion,
+  checkManual,
+  checkingManual,
+  manualResult,
+}: SettingsPanelProps) {
   const open = useAppStore((s) => s.settingsOpen);
   const settings = useAppStore((s) => s.settings);
   const characters = useAppStore((s) => s.characters);
@@ -65,7 +78,33 @@ export function SettingsPanel() {
           Always on top
         </label>
 
-        <div className="mt-6 flex justify-end gap-2">
+        <div className="mt-6 border-t border-border pt-4">
+          <p className="text-xs uppercase tracking-wide text-muted">About</p>
+          <p className="mt-1 text-sm text-fg">
+            IncFleetChat {appVersion ? formatAppVersionLabel(appVersion) : "…"}
+          </p>
+          <button
+            type="button"
+            disabled={checkingManual}
+            className="mt-2 w-full rounded-md border border-border px-3 py-1.5 text-xs text-muted hover:text-fg disabled:opacity-50"
+            onClick={() => void checkManual()}
+          >
+            {checkingManual ? "Checking…" : "Check for updates"}
+          </button>
+          {manualResult?.kind === "upToDate" && (
+            <p className="mt-1 text-[10px] text-muted">Up to date</p>
+          )}
+          {manualResult?.kind === "available" && (
+            <p className="mt-1 text-[10px] text-muted">
+              {formatAppVersionLabel(manualResult.version)} available
+            </p>
+          )}
+          {manualResult?.kind === "error" && (
+            <p className="mt-1 text-[10px] text-overdue">{manualResult.message}</p>
+          )}
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
             className={cn(

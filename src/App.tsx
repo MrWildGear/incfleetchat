@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
-import { getVersion } from "@tauri-apps/api/app";
+import { useEffect, useMemo } from "react";
 import { Pin, Settings, Wrench } from "lucide-react";
 import { useAppStore } from "./store";
 import { SiteRowView, derivePhase } from "./components/SiteRow";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { UpdateModals } from "./components/UpdateModals";
+import { useAppUpdater } from "./hooks/useAppUpdater";
 import { cn } from "./lib/utils";
-import type { BoardStatus, SiteRow } from "./lib/types";
+import type { Board, BoardStatus, SiteRow } from "./lib/types";
 import { invoke } from "@tauri-apps/api/core";
-import type { Board } from "./lib/types";
 
 function statusLabel(status: BoardStatus): string {
   switch (status.kind) {
@@ -23,7 +23,23 @@ function statusLabel(status: BoardStatus): string {
 }
 
 function App() {
-  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const updater = useAppUpdater();
+  const {
+    appVersion,
+    pendingVersion,
+    promptOpen,
+    progress,
+    progressError,
+    deferredUpdate,
+    manualResult,
+    checkingManual,
+    onUpdateNow,
+    onLater,
+    onCloseProgressError,
+    onRetryInstall,
+    checkManual,
+    runLaunchCheck,
+  } = updater;
   const board = useAppStore((s) => s.board);
   const settings = useAppStore((s) => s.settings);
   const nowMs = useAppStore((s) => s.nowMs);
@@ -40,10 +56,8 @@ function App() {
   }, [hydrate]);
 
   useEffect(() => {
-    void getVersion()
-      .then(setAppVersion)
-      .catch(() => setAppVersion(null));
-  }, []);
+    void runLaunchCheck();
+  }, [runLaunchCheck]);
 
   useEffect(() => {
     const id = window.setInterval(() => tick(), 1000);
@@ -104,9 +118,12 @@ function App() {
           type="button"
           title="Settings"
           onClick={() => setSettingsOpen(true)}
-          className="rounded-md border border-border p-1.5 text-muted hover:text-fg"
+          className="relative rounded-md border border-border p-1.5 text-muted hover:text-fg"
         >
           <Settings className="h-4 w-4" />
+          {deferredUpdate && pendingVersion ? (
+            <span className="absolute right-1 top-1 h-1 w-1 rounded-full bg-accent" />
+          ) : null}
         </button>
         <button
           type="button"
@@ -141,7 +158,22 @@ function App() {
         )}
       </main>
 
-      <SettingsPanel />
+      <SettingsPanel
+        appVersion={appVersion}
+        checkManual={checkManual}
+        checkingManual={checkingManual}
+        manualResult={manualResult}
+      />
+      <UpdateModals
+        pendingVersion={pendingVersion}
+        promptOpen={promptOpen}
+        progress={progress}
+        progressError={progressError}
+        onUpdateNow={onUpdateNow}
+        onLater={onLater}
+        onCloseProgressError={onCloseProgressError}
+        onRetryInstall={onRetryInstall}
+      />
     </div>
   );
 }
