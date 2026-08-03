@@ -45,6 +45,7 @@ export function ToolsApp() {
   const [walletBuffer, setWalletBuffer] = useState("");
   const [showDrilldown, setShowDrilldown] = useState(false);
   const [showListeners, setShowListeners] = useState(false);
+  const [showEnrichLog, setShowEnrichLog] = useState(false);
   const [gamelogsPath, setGamelogsPath] = useState("");
   const [fcCharacter, setFcCharacter] = useState("");
   const [enriching, setEnriching] = useState(false);
@@ -307,10 +308,7 @@ export function ToolsApp() {
     for (const s of focus?.enrichment?.sites ?? []) map.set(s.occurred_at, s);
     return map;
   }, [focus?.enrichment]);
-  /** Top Analytics strip diagnostics: everything in `focus.diagnostics` plus
-   * enrichment-only warnings (e.g. stale-schema, partial spawn coverage) that
-   * live on the enrichment snapshot itself. Rendered near Gamelogs/Re-enrich
-   * only — never duplicated into Summary. */
+  /** Enrichment + focus diagnostics for the Enrich log drill-down (not Summary). */
   const topDiagnostics = useMemo(() => {
     const generic = focus?.diagnostics ?? [];
     const enrichmentOnly = focus?.enrichment?.diagnostics ?? [];
@@ -615,28 +613,14 @@ export function ToolsApp() {
             </div>
           </div>
 
-          {topDiagnostics.length > 0 ? (
-            <ul className="text-xs text-muted">
-              {topDiagnostics.map((d, i) => (
-                <li key={i}>
-                  [{d.level}] {d.message}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-
           <div className="flex shrink-0 items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <h2 className="text-xs font-semibold text-muted">Results</h2>
               {enriching ? (
                 <span className="text-xs text-accent">Enriching…</span>
-              ) : focus?.enrichment ? (
-                <span className="text-xs text-muted">
-                  Enriched {focus.enrichment.listeners.length} listeners
-                </span>
               ) : null}
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <button
                 type="button"
                 disabled={!canReenrich || enriching}
@@ -650,6 +634,21 @@ export function ToolsApp() {
                 title="Recompute combat→payout and dead missiles from gamelogs"
               >
                 Re-enrich
+              </button>
+              <button
+                type="button"
+                disabled={
+                  !focus?.enrichment && topDiagnostics.length === 0
+                }
+                onClick={() => setShowEnrichLog((v) => !v)}
+                className={cn(
+                  "rounded border px-2 py-1 text-xs",
+                  focus?.enrichment || topDiagnostics.length > 0
+                    ? "border-accent/40 text-accent hover:bg-accent/10"
+                    : "cursor-not-allowed border-border text-muted/40",
+                )}
+              >
+                {showEnrichLog ? "Hide enrich log" : "Enrich log"}
               </button>
               <button
                 type="button"
@@ -797,8 +796,68 @@ export function ToolsApp() {
             </aside>
           </div>
 
+          {showEnrichLog &&
+          (focus?.enrichment || topDiagnostics.length > 0) ? (
+            <div
+              className="flex max-h-[50vh] min-h-48 shrink-0 flex-col overflow-hidden rounded border border-border"
+            >
+              <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-b border-border bg-surface-raised px-3 py-2">
+                <h3 className="text-xs font-semibold">
+                  Enrich log
+                  {focus?.enrichment
+                    ? ` · ${focus.enrichment.listeners.length} listeners`
+                    : ""}
+                  {topDiagnostics.length
+                    ? ` · ${topDiagnostics.length} messages`
+                    : ""}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setShowEnrichLog(false)}
+                  className="rounded border border-border px-2 py-1 text-xs hover:border-accent/40 hover:text-accent"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3 text-xs">
+                {focus?.enrichment?.listeners?.length ? (
+                  <div>
+                    <p className="mb-1 font-semibold text-muted">
+                      Enriched listeners ({focus.enrichment.listeners.length})
+                    </p>
+                    <ul className="columns-2 gap-x-4 text-fg md:columns-3">
+                      {focus.enrichment.listeners.map((name) => (
+                        <li key={name} className="break-inside-avoid py-0.5">
+                          {name}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {topDiagnostics.length > 0 ? (
+                  <div>
+                    <p className="mb-1 font-semibold text-muted">
+                      Diagnostics ({topDiagnostics.length})
+                    </p>
+                    <ul className="space-y-1 text-muted">
+                      {topDiagnostics.map((d, i) => (
+                        <li key={i} className="break-all">
+                          [{d.level}] {d.message}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="text-muted">No enrichment diagnostics.</p>
+                )}
+              </div>
+            </div>
+          ) : null}
+
           {showListeners && focus?.enrichment?.missiles?.length ? (
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-border">
+            <div
+              className="flex max-h-[50vh] min-h-48 shrink-0 flex-col overflow-hidden rounded border border-border"
+            >
               <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-b border-border bg-surface-raised px-3 py-2">
                 <h3 className="text-xs font-semibold">
                   Listeners ({focus.enrichment.missiles.length})
@@ -841,7 +900,9 @@ export function ToolsApp() {
           ) : null}
 
           {showDrilldown && focus?.report?.sites?.length ? (
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-border">
+            <div
+              className="flex max-h-[50vh] min-h-48 shrink-0 flex-col overflow-hidden rounded border border-border"
+            >
               <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-b border-border bg-surface-raised px-3 py-2">
                 <h3 className="text-xs font-semibold">
                   Per-site detail ({focus.report.sites.length})
