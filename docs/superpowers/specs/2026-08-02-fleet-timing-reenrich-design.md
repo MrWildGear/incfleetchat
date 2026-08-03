@@ -33,8 +33,8 @@ Warp and Combat→payout clocks are wrong in practice because timing is still FC
 |-------|--------|
 | Timing pool | Merge all listeners into one timeline; run warp + combat→payout on that stream |
 | Multi-listener same jump | Coalesce overlapping segments + **10s** accepted-start debounce |
+| Warp end markers | `Regrouping` \| `CombatHit` \| `CombatAny` from the **jump cohort** only (listeners who `FollowingWarp`'d within the 10s window) — blocks straggler combat on the previous grid |
 | Combat→payout start | Earliest fleet `CombatHit` after `clear_start`; not `CombatAny` |
-| Warp end markers | Still `Regrouping` \| `CombatHit` \| `CombatAny` (fleet-wide) |
 | Source | `fleet` when warp markers used; else `heuristic` (replace fc/borrowed meaning for this clock) |
 | Re-enrich enable | Run scope **or** Spawn/Overall with ≥1 run in scope (not sealed_run_id) |
 | Spawn/Overall re-enrich | All runs in scope; partial OK; keep old snapshot on failure; top-strip warnings |
@@ -71,7 +71,7 @@ For each site gap `(prev payout | run_start) → this payout`:
 
 1. Pool all listeners’ events in `(gap_start, gap_end]`.
 2. Collect `FollowingWarp` starts, sorted. Accept a start only if ≥ **10s** after the previous accepted start.
-3. Each accepted start ends at earliest of: next accepted start, fleet end-marker after start (`Regrouping` | `CombatHit` | `CombatAny`), or payout.
+3. Each accepted start ends at earliest of: next accepted start, jump-cohort end-marker after start (`Regrouping` \| `CombatHit` \| `CombatAny` from listeners who `FollowingWarp`'d within 10s of that start), or payout.
 4. Coalesce overlapping/adjacent segments; `warp_seconds` = sum of coalesced wall-clock lengths.
 5. `clear_start` = end of last coalesced segment. No markers + non-break → `clear_start = gap_start`, warp `0`, source `heuristic`. Break (no markers, gap > threshold) → warp `0`, combat `null`, source `heuristic`.
 6. `combat_to_payout_seconds` = `payout −` earliest fleet `CombatHit` with `clear_start ≤ t < payout`, or `null`.
