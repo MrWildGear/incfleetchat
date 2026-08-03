@@ -497,9 +497,6 @@ impl RunDesk {
                 runs.push((run_id.clone(), snapshot));
             }
         }
-        if runs.is_empty() {
-            return Ok((None, Vec::new()));
-        }
         let aggregate = aggregate_enrichments(&runs, run_ids.len());
         Ok((Some(aggregate), Vec::new()))
     }
@@ -781,6 +778,21 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_warns_when_all_runs_lack_enrichment() {
+        let aggregate = aggregate_enrichments(&[], 3);
+
+        assert!(aggregate.sites.is_empty());
+        assert!(aggregate.missiles.is_empty());
+        assert!(
+            aggregate.diagnostics.iter().any(|d| {
+                d.level == "warn" && d.message == "3 of 3 runs lack enrichment"
+            }),
+            "diagnostics: {:?}",
+            aggregate.diagnostics
+        );
+    }
+
+    #[test]
     fn aggregate_no_warning_when_all_runs_in_scope_enriched() {
         let t0 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 0, 0).unwrap();
         let run1 = {
@@ -926,6 +938,57 @@ Immensea
             .unwrap();
         assert!(refocused.enrichment.is_some());
         assert!(refocused.sealed_run_id.is_some());
+    }
+
+    /// Spawn scope with runs but zero readable enrichments still returns an
+    /// empty aggregate carrying the partial-coverage warning for the strip.
+    #[tokio::test]
+    async fn spawn_scope_warns_when_all_runs_lack_enrichment() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("t.db")).await.unwrap();
+        let desk = RunDesk::new(db);
+        let settings = RunSettings {
+            space: SpaceBand::LowNull,
+            fleet_size: 15,
+            expected_isk: 15_000_000,
+            lp_per_char: 2_000,
+            isk_per_lp: 1400.0,
+            break_threshold_minutes: 25,
+            run_start: None,
+        };
+        let report = build_report(&[], &settings);
+        desk.db
+            .upsert_spawn("4MY-AB", None)
+            .await
+            .unwrap();
+        desk.db
+            .save_run("run-a", "4MY-AB", &settings, "", "", &report)
+            .await
+            .unwrap();
+        desk.db
+            .save_run("run-b", "4MY-AB", &settings, "", "", &report)
+            .await
+            .unwrap();
+
+        let focus = desk
+            .focus(ReportScope::Spawn {
+                constellation: "4MY-AB".into(),
+            })
+            .await
+            .unwrap();
+        let enrichment = focus.enrichment.expect(
+            "spawn with runs but no enrichment should still return an empty aggregate",
+        );
+
+        assert!(enrichment.sites.is_empty());
+        assert!(enrichment.missiles.is_empty());
+        assert!(
+            enrichment.diagnostics.iter().any(|d| {
+                d.level == "warn" && d.message == "2 of 2 runs lack enrichment"
+            }),
+            "diagnostics: {:?}",
+            enrichment.diagnostics
+        );
     }
 
     /// Spawn scope aggregates every enriched run in the spawn: missiles
