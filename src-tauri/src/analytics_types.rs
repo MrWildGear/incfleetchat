@@ -88,12 +88,16 @@ pub struct Catalog {
 }
 
 /// Where a site row's warp/combat→payout split came from.
+///
+/// New snapshots emit `fleet` or `heuristic`; `fc` and `borrowed` are legacy
+/// values retained for deserialize compatibility.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EnrichmentSource {
     Fc,
     Borrowed,
     Heuristic,
+    Fleet,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

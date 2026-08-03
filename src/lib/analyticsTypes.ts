@@ -86,7 +86,7 @@ export type SpawnDraft = {
   title: string | null;
 };
 
-export type EnrichmentSource = "fc" | "borrowed" | "heuristic";
+export type EnrichmentSource = "fc" | "borrowed" | "heuristic" | "fleet";
 
 export type EnrichmentSite = {
   occurred_at: string;
