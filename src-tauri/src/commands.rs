@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 
 use crate::analytics_types::{AmendOp, EditionFocus, ReportScope, Tray};
 use crate::db::Db;
+use crate::enrichment_pipeline::EnrichmentInputs;
 use crate::run_desk::RunDesk;
 use crate::state::{default_chatlogs_dir, AppState};
 use crate::types::{AppSettings, Board};
@@ -153,8 +154,11 @@ async fn run_desk_paste(
 }
 
 #[tauri::command]
-async fn run_desk_analyze(desk: State<'_, Arc<RunDesk>>) -> Result<EditionFocus, String> {
-    desk.analyze().await
+async fn run_desk_analyze(
+    desk: State<'_, Arc<RunDesk>>,
+    inputs: EnrichmentInputs,
+) -> Result<EditionFocus, String> {
+    desk.analyze(&inputs).await
 }
 
 #[tauri::command]
@@ -177,8 +181,9 @@ async fn run_desk_amend(
 async fn run_desk_reenrich(
     desk: State<'_, Arc<RunDesk>>,
     run_id: Option<String>,
+    inputs: EnrichmentInputs,
 ) -> Result<EditionFocus, String> {
-    desk.amend(AmendOp::ReenrichRun { run_id }).await
+    desk.reenrich(run_id, &inputs).await
 }
 
 #[tauri::command]

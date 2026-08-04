@@ -29,10 +29,6 @@ pub enum AmendOp {
     ReopenTrays,
     OpenRun { run_id: String },
     SetConstellation { constellation: String },
-    /// Recompute gamelog enrichment. `Some(run_id)` = that run.
-    /// `None` = every run in the current report scope (Spawn/Overall = all
-    /// catalog runs in scope; unused for Run — UI always passes the id).
-    ReenrichRun { run_id: Option<String> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

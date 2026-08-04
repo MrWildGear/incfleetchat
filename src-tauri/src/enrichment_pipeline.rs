@@ -1,10 +1,11 @@
-//! Enrichment pipeline: settings + gamelog scan → `enrich_run` → persist,
+//! Enrichment pipeline: Enrichment inputs + gamelog scan → `enrich_run` → persist,
 //! plus load-and-aggregate for Spawn/Overall focus.
 //!
 //! Pure math lives in `enrichment`. The run desk calls through this module
 //! via [`EnrichmentStore`] and [`GamelogScan`] adapters.
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::analytics_types::{Diagnostic, EnrichmentSnapshot};
@@ -12,15 +13,51 @@ use crate::db::{Db, EnrichmentLoad};
 use crate::enrichment::{aggregate_enrichments, enrich_run};
 use crate::gamelog_scan::{default_gamelogs_dir, scan_gamelogs, ScanResult};
 use crate::timing::{AnalyticsReport, RunSettings};
-use crate::types::AppSettings;
 use crate::wallet_parse::{extract_wallet_fc_hint, parse_wallet_journal};
+
+/// Run-time bag for one enrich/reenrich — not AppSettings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnrichmentInputs {
+    pub gamelogs_dir: String,
+    pub fc_character: String,
+    pub ammo_launchers: i64,
+    pub ammo_per_launcher: i64,
+}
+
+impl Default for EnrichmentInputs {
+    fn default() -> Self {
+        Self {
+            gamelogs_dir: String::new(),
+            fc_character: String::new(),
+            ammo_launchers: 6,
+            ammo_per_launcher: 26,
+        }
+    }
+}
+
+impl EnrichmentInputs {
+    fn resolve_gamelogs_dir(&self) -> PathBuf {
+        let trimmed = self.gamelogs_dir.trim();
+        if trimmed.is_empty() {
+            default_gamelogs_dir()
+        } else {
+            PathBuf::from(trimmed)
+        }
+    }
+
+    fn fc_character_opt(&self) -> Option<&str> {
+        let trimmed = self.fc_character.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+}
 
 /// Narrow DB seam used by the enrichment pipeline.
 pub trait EnrichmentStore: Send + Sync {
-    fn get_settings(
-        &self,
-    ) -> impl std::future::Future<Output = Result<AppSettings, String>> + Send;
-
     fn save_enrichment(
         &self,
         run_id: &str,
@@ -40,10 +77,6 @@ pub trait EnrichmentStore: Send + Sync {
 }
 
 impl EnrichmentStore for Db {
-    async fn get_settings(&self) -> Result<AppSettings, String> {
-        Db::get_settings(self).await.map_err(|e| e.to_string())
-    }
-
     async fn save_enrichment(
         &self,
         run_id: &str,
@@ -98,6 +131,7 @@ pub async fn enrich_and_save<S: EnrichmentStore, G: GamelogScan>(
     settings: &RunSettings,
     report: &AnalyticsReport,
     wallet_text: &str,
+    inputs: &EnrichmentInputs,
 ) -> Result<(), String> {
     if report.sites.is_empty() {
         return Ok(());
@@ -106,19 +140,12 @@ pub async fn enrich_and_save<S: EnrichmentStore, G: GamelogScan>(
     let site_durations: Vec<Option<i64>> =
         report.sites.iter().map(|s| s.duration_seconds).collect();
 
-    let app_settings = store.get_settings().await?;
-    let gamelogs_dir = app_settings
-        .gamelogs_dir
-        .as_ref()
-        .map(|d| d.trim())
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(default_gamelogs_dir);
+    let gamelogs_dir = inputs.resolve_gamelogs_dir();
     let wallet_start = settings.run_start.unwrap_or(site_times[0]);
     let wallet_end = *site_times.last().unwrap();
 
-    let launchers = app_settings.ammo_launchers.max(0) as u32;
-    let missiles_per_cycle = launchers.saturating_mul(app_settings.ammo_per_launcher.max(0) as u32);
+    let launchers = inputs.ammo_launchers.max(0) as u32;
+    let missiles_per_cycle = launchers.saturating_mul(inputs.ammo_per_launcher.max(0) as u32);
 
     let scan_result = if gamelogs_dir.is_dir() {
         scan.scan(&gamelogs_dir, wallet_start, wallet_end)
@@ -145,7 +172,7 @@ pub async fn enrich_and_save<S: EnrichmentStore, G: GamelogScan>(
         settings.run_start,
         missiles_per_cycle,
         launchers,
-        app_settings.fc_character.as_deref(),
+        inputs.fc_character_opt(),
         wallet_fc_hint.as_deref(),
     );
     snapshot
@@ -163,13 +190,14 @@ pub async fn reenrich<S: EnrichmentStore, G: GamelogScan>(
     store: &S,
     scan: &G,
     run_id: &str,
+    inputs: &EnrichmentInputs,
 ) -> Result<(), String> {
     let bundle = store
         .load_run_for_enrich(run_id)
         .await?
         .ok_or_else(|| format!("Run {run_id} not found"))?;
     let (settings, report, wallet_text) = bundle;
-    enrich_and_save(store, scan, run_id, &settings, &report, &wallet_text).await
+    enrich_and_save(store, scan, run_id, &settings, &report, &wallet_text, inputs).await
 }
 
 /// Load each run's enrichment (oldest first) and aggregate the ones that
@@ -207,16 +235,14 @@ mod tests {
     use std::sync::Arc;
 
     struct FakeStore {
-        settings: AppSettings,
         saved: Mutex<Vec<(String, EnrichmentSnapshot)>>,
         runs: Mutex<HashMap<String, (RunSettings, AnalyticsReport, String)>>,
         enrichments: Mutex<HashMap<String, EnrichmentLoad>>,
     }
 
     impl FakeStore {
-        fn new(settings: AppSettings) -> Self {
+        fn new() -> Self {
             Self {
-                settings,
                 saved: Mutex::new(Vec::new()),
                 runs: Mutex::new(HashMap::new()),
                 enrichments: Mutex::new(HashMap::new()),
@@ -225,10 +251,6 @@ mod tests {
     }
 
     impl EnrichmentStore for FakeStore {
-        async fn get_settings(&self) -> Result<AppSettings, String> {
-            Ok(self.settings.clone())
-        }
-
         async fn save_enrichment(
             &self,
             run_id: &str,
@@ -312,9 +334,16 @@ mod tests {
         }
     }
 
+    fn inputs_with_dir(dir: &Path) -> EnrichmentInputs {
+        EnrichmentInputs {
+            gamelogs_dir: dir.display().to_string(),
+            ..EnrichmentInputs::default()
+        }
+    }
+
     #[tokio::test]
     async fn enrich_and_save_skips_empty_sites() {
-        let store = FakeStore::new(AppSettings::default());
+        let store = FakeStore::new();
         let calls = Arc::new(Mutex::new(0u32));
         let scan = CannedScan {
             result: ScanResult {
@@ -331,6 +360,7 @@ mod tests {
             &RunSettings::default(),
             &report,
             "",
+            &EnrichmentInputs::default(),
         )
         .await
         .unwrap();
@@ -341,9 +371,7 @@ mod tests {
     #[tokio::test]
     async fn enrich_and_save_scans_and_persists_when_gamelogs_dir_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let mut settings = AppSettings::default();
-        settings.gamelogs_dir = Some(dir.path().display().to_string());
-        let store = FakeStore::new(settings);
+        let store = FakeStore::new();
         let calls = Arc::new(Mutex::new(0u32));
         let scan = CannedScan {
             result: ScanResult {
@@ -366,6 +394,7 @@ mod tests {
             &RunSettings::default(),
             &report,
             "",
+            &inputs_with_dir(dir.path()),
         )
         .await
         .unwrap();
@@ -379,9 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn enrich_and_save_skips_scan_when_gamelogs_dir_missing() {
-        let mut settings = AppSettings::default();
-        settings.gamelogs_dir = Some("C:\\definitely\\missing\\gamelogs-xyz".into());
-        let store = FakeStore::new(settings);
+        let store = FakeStore::new();
         let calls = Arc::new(Mutex::new(0u32));
         let scan = CannedScan {
             result: ScanResult {
@@ -392,6 +419,10 @@ mod tests {
         };
         let t0 = Utc.with_ymd_and_hms(2026, 8, 2, 20, 10, 0).unwrap();
         let report = empty_report_with_sites(vec![site_at(t0)]);
+        let inputs = EnrichmentInputs {
+            gamelogs_dir: "C:\\definitely\\missing\\gamelogs-xyz".into(),
+            ..EnrichmentInputs::default()
+        };
 
         enrich_and_save(
             &store,
@@ -400,6 +431,7 @@ mod tests {
             &RunSettings::default(),
             &report,
             "",
+            &inputs,
         )
         .await
         .unwrap();
@@ -421,9 +453,7 @@ mod tests {
     #[tokio::test]
     async fn reenrich_loads_sealed_run_then_saves() {
         let dir = tempfile::tempdir().unwrap();
-        let mut settings = AppSettings::default();
-        settings.gamelogs_dir = Some(dir.path().display().to_string());
-        let store = FakeStore::new(settings);
+        let store = FakeStore::new();
         let t0 = Utc.with_ymd_and_hms(2026, 8, 2, 20, 10, 0).unwrap();
         let report = empty_report_with_sites(vec![site_at(t0)]);
         store.runs.lock().insert(
@@ -439,7 +469,9 @@ mod tests {
             calls: calls.clone(),
         };
 
-        reenrich(&store, &scan, "run-9").await.unwrap();
+        reenrich(&store, &scan, "run-9", &inputs_with_dir(dir.path()))
+            .await
+            .unwrap();
         assert_eq!(*calls.lock(), 1);
         assert_eq!(store.saved.lock().len(), 1);
         assert_eq!(store.saved.lock()[0].0, "run-9");
@@ -447,7 +479,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_and_aggregate_skips_missing_and_stale() {
-        let store = FakeStore::new(AppSettings::default());
+        let store = FakeStore::new();
         let t0 = Utc.with_ymd_and_hms(2026, 8, 2, 20, 10, 0).unwrap();
         let ok = EnrichmentSnapshot {
             resolved_fc: Some("FC".into()),

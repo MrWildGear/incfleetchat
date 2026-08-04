@@ -39,7 +39,7 @@ function recordingInvoke(handlers: Record<string, (args?: unknown) => unknown>) 
   return { invoke, calls };
 }
 
-const prelude = {
+const inputs = {
   gamelogsDir: " C:\\logs ",
   fcCharacter: " FC ",
   ammoLaunchers: 6,
@@ -59,50 +59,38 @@ describe("createRunDeskClient.cmds.open", () => {
 });
 
 describe("createRunDeskClient.analyze", () => {
-  it("persists gamelogs/FC and ammo, amends session settings, then analyzes", async () => {
+  it("amends session settings then analyzes with Enrichment inputs", async () => {
     const after = focus({ sealed_run_id: "analyzed" });
     const { invoke, calls } = recordingInvoke({
-      set_settings: () => undefined,
       run_desk_amend: () => focus(),
       run_desk_analyze: () => after,
     });
     const client = createRunDeskClient(invoke);
-    await expect(client.analyze(defaultSettings, prelude)).resolves.toEqual(
+    await expect(client.analyze(defaultSettings, inputs)).resolves.toEqual(
       after,
     );
     expect(calls.map((c) => c.cmd)).toEqual([
-      "set_settings",
-      "set_settings",
       "run_desk_amend",
       "run_desk_analyze",
     ]);
     expect(calls[0]?.args).toEqual({
-      patch: { gamelogs_dir: "C:\\logs", fc_character: "FC" },
-    });
-    expect(calls[1]?.args).toEqual({
-      patch: { ammo_launchers: 6, ammo_per_launcher: 26 },
-    });
-    expect(calls[2]?.args).toEqual({
       op: { op: "set_session_settings", settings: defaultSettings },
     });
+    expect(calls[1]?.args).toEqual({ inputs });
   });
 });
 
 describe("createRunDeskClient.reenrich", () => {
-  it("persists prelude then reenriches with runId", async () => {
+  it("passes Enrichment inputs and runId on the wire", async () => {
     const after = focus({ sealed_run_id: "r9" });
     const { invoke, calls } = recordingInvoke({
-      set_settings: () => undefined,
       run_desk_reenrich: () => after,
     });
     const client = createRunDeskClient(invoke);
-    await expect(client.reenrich("r9", prelude)).resolves.toEqual(after);
-    expect(calls.map((c) => c.cmd)).toEqual([
-      "set_settings",
-      "set_settings",
-      "run_desk_reenrich",
+    await expect(client.reenrich("r9", inputs)).resolves.toEqual(after);
+    expect(calls).toEqual([
+      { cmd: "run_desk_reenrich", args: { runId: "r9", inputs } },
     ]);
-    expect(calls[2]?.args).toEqual({ runId: "r9" });
   });
 });
 

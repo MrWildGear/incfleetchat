@@ -83,8 +83,12 @@ The persisted enrichment document for one run, or the merged document for a Spaw
 _Avoid_: enrichment report, enrichment JSON
 
 **Enrichment pipeline**:
-The orchestration that loads settings and gamelogs, runs enrichment, and persists or loads snapshots for the desk — distinct from pure enrichment math.
+The orchestration that takes Enrichment inputs, scans gamelogs, runs enrichment, and persists or loads snapshots for the desk — distinct from pure enrichment math.
 _Avoid_: enrichment (the math), RunDesk (owns session, not this job)
+
+**Enrichment inputs**:
+The run-time bag the Enrichment pipeline needs for one enrich/reenrich: gamelogs directory, FC character, launchers, and ammo per launcher — not AppSettings and not a persist-before-enrich prelude.
+_Avoid_: EnrichPrelude, prelude, AppSettings (when meaning enrich-time fit)
 
 **Aggregate enrichment**:
 Merging per-run enrichment snapshots into one snapshot for Spawn or Overall focus, without re-scanning gamelogs.

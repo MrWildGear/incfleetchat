@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   EditionFocus,
-  EnrichPrelude,
+  EnrichmentInputs,
   ReportScope,
   RunSettings,
   SpaceBand,
@@ -28,8 +28,8 @@ export type UseRunDeskResult = {
   deleting: boolean;
   applyFocus: (f: EditionFocus) => void;
   open: () => Promise<void>;
-  analyze: (prelude: EnrichPrelude) => Promise<void>;
-  reenrich: (prelude: EnrichPrelude) => Promise<void>;
+  analyze: (inputs: EnrichmentInputs) => Promise<void>;
+  reenrich: (inputs: EnrichmentInputs) => Promise<void>;
   pasteManifest: (text: string) => Promise<void>;
   importWallet: (text: string, replace: boolean) => Promise<EditionFocus | null>;
   setScope: (scope: ReportScope) => Promise<void>;
@@ -75,10 +75,10 @@ export function useRunDesk(): UseRunDeskResult {
   }, [applyFocus, client]);
 
   const analyze = useCallback(
-    async (prelude: EnrichPrelude) => {
+    async (inputs: EnrichmentInputs) => {
       try {
         setEnriching(true);
-        applyFocus(await client.analyze(settings, prelude));
+        applyFocus(await client.analyze(settings, inputs));
       } catch (e) {
         setError(String(e));
       } finally {
@@ -89,12 +89,12 @@ export function useRunDesk(): UseRunDeskResult {
   );
 
   const reenrich = useCallback(
-    async (prelude: EnrichPrelude) => {
+    async (inputs: EnrichmentInputs) => {
       try {
         setEnriching(true);
         const runId =
           focus?.scope.kind === "run" ? focus.scope.run_id : undefined;
-        applyFocus(await client.reenrich(runId, prelude));
+        applyFocus(await client.reenrich(runId, inputs));
       } catch (e) {
         setError(String(e));
       } finally {

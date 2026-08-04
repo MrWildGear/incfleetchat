@@ -429,7 +429,7 @@ impl Db {
     }
 
     /// Load the settings/report/wallet text needed to recompute enrichment
-    /// for an already-sealed run (used by the `ReenrichRun` amend).
+    /// for an already-sealed run (used by RunDesk reenrich).
     pub async fn load_run_for_enrich(
         &self,
         run_id: &str,

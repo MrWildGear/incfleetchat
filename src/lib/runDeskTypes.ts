@@ -26,7 +26,7 @@ export type ReportScope =
   | { kind: "spawn"; constellation: string }
   | { kind: "run"; run_id: string };
 
-export type EnrichPrelude = {
+export type EnrichmentInputs = {
   gamelogsDir: string;
   fcCharacter: string;
   ammoLaunchers: number;
@@ -38,8 +38,7 @@ export type AmendOp =
   | { op: "set_session_settings"; settings: RunSettings }
   | { op: "reopen_trays" }
   | { op: "open_run"; run_id: string }
-  | { op: "set_constellation"; constellation: string }
-  | { op: "reenrich_run"; run_id: string | null };
+  | { op: "set_constellation"; constellation: string };
 
 export type PayoutTicket = { isk: number; lp_per_char: number };
 

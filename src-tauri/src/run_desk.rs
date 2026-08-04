@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 
 use crate::analytics_types::*;
 use crate::db::{Db, EnrichmentLoad};
-use crate::enrichment_pipeline::{self, FsGamelogScan};
+use crate::enrichment_pipeline::{self, EnrichmentInputs, FsGamelogScan};
 use crate::spawn_parse::{parse_manifest, SpawnDraft};
 use crate::timing::{build_report, merge_reports, AnalyticsReport, RunSettings};
 use crate::wallet_parse::{parse_wallet_journal, WalletPayout};
@@ -99,7 +99,7 @@ impl RunDesk {
         self.snapshot().await
     }
 
-    pub async fn analyze(&self) -> Result<EditionFocus, String> {
+    pub async fn analyze(&self, inputs: &EnrichmentInputs) -> Result<EditionFocus, String> {
         let (settings, spawn_draft, pending, wallet_text, manifest_text) = {
             let st = self.inner.lock();
             (
@@ -150,6 +150,7 @@ impl RunDesk {
             &settings,
             &report,
             &wallet_text,
+            inputs,
         )
         .await;
 
@@ -175,6 +176,58 @@ impl RunDesk {
             }
         }
 
+        self.snapshot().await
+    }
+
+    /// Recompute gamelog enrichment. `Some(run_id)` = that run.
+    /// `None` = every run in the current report scope.
+    pub async fn reenrich(
+        &self,
+        run_id: Option<String>,
+        inputs: &EnrichmentInputs,
+    ) -> Result<EditionFocus, String> {
+        let ids: Vec<String> = match run_id {
+            Some(id) => vec![id],
+            None => {
+                let scope = self.inner.lock().scope.clone();
+                match scope {
+                    ReportScope::Run { run_id } => vec![run_id],
+                    ReportScope::Spawn { constellation } => self
+                        .db
+                        .list_run_ids_for_spawn(&constellation)
+                        .await
+                        .map_err(|e| e.to_string())?,
+                    ReportScope::Overall => self
+                        .db
+                        .list_all_run_ids()
+                        .await
+                        .map_err(|e| e.to_string())?,
+                }
+            }
+        };
+        let total = ids.len();
+        let mut ok = 0usize;
+        let mut diags = Vec::new();
+        for id in &ids {
+            match enrichment_pipeline::reenrich(&self.db, &FsGamelogScan, id, inputs).await {
+                Ok(()) => ok += 1,
+                Err(e) => diags.push(Diagnostic {
+                    level: "warn".into(),
+                    message: format!("Failed re-enrich {id}: {e}"),
+                }),
+            }
+        }
+        if total > 0 {
+            diags.push(Diagnostic {
+                level: if ok == total {
+                    "info".into()
+                } else {
+                    "warn".into()
+                },
+                message: format!("{ok} of {total} re-enriched"),
+            });
+        }
+        self.inner.lock().diagnostics.extend(diags);
         self.snapshot().await
     }
 
@@ -211,46 +264,6 @@ impl RunDesk {
                 let mut draft = st.staging_spawn.clone().unwrap_or_default();
                 draft.constellation = Some(constellation.trim().to_string());
                 st.staging_spawn = Some(draft);
-            }
-            AmendOp::ReenrichRun { run_id } => {
-                let ids: Vec<String> = match run_id {
-                    Some(id) => vec![id],
-                    None => {
-                        let scope = self.inner.lock().scope.clone();
-                        match scope {
-                            ReportScope::Run { run_id } => vec![run_id],
-                            ReportScope::Spawn { constellation } => self
-                                .db
-                                .list_run_ids_for_spawn(&constellation)
-                                .await
-                                .map_err(|e| e.to_string())?,
-                            ReportScope::Overall => self
-                                .db
-                                .list_all_run_ids()
-                                .await
-                                .map_err(|e| e.to_string())?,
-                        }
-                    }
-                };
-                let total = ids.len();
-                let mut ok = 0usize;
-                let mut diags = Vec::new();
-                for id in &ids {
-                    match enrichment_pipeline::reenrich(&self.db, &FsGamelogScan, id).await {
-                        Ok(()) => ok += 1,
-                        Err(e) => diags.push(Diagnostic {
-                            level: "warn".into(),
-                            message: format!("Failed re-enrich {id}: {e}"),
-                        }),
-                    }
-                }
-                if total > 0 {
-                    diags.push(Diagnostic {
-                        level: if ok == total { "info".into() } else { "warn".into() },
-                        message: format!("{ok} of {total} re-enriched"),
-                    });
-                }
-                self.inner.lock().diagnostics.extend(diags);
             }
         }
         self.snapshot().await
@@ -530,6 +543,18 @@ mod tests {
         }
     }
 
+    fn default_enrichment_inputs() -> EnrichmentInputs {
+        EnrichmentInputs::default()
+    }
+
+    fn enrichment_inputs(gamelogs_dir: &std::path::Path, fc: &str) -> EnrichmentInputs {
+        EnrichmentInputs {
+            gamelogs_dir: gamelogs_dir.to_string_lossy().to_string(),
+            fc_character: fc.into(),
+            ..EnrichmentInputs::default()
+        }
+    }
+
     #[tokio::test]
     async fn analyze_saves_run_and_spawn_aggregate() {
         let dir = tempdir().unwrap();
@@ -562,7 +587,7 @@ Immensea
 2026.07.29 23:08\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\tx\n\
 2026.07.29 23:14\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\ty\n";
         desk.paste(Tray::Wallet, wallet).await.unwrap();
-        let focus = desk.analyze().await.unwrap();
+        let focus = desk.analyze(&default_enrichment_inputs()).await.unwrap();
         assert!(focus.report.is_some());
         assert_eq!(focus.report.as_ref().unwrap().session.sites_ran, 2);
         assert_eq!(focus.catalog.runs.len(), 1);
@@ -596,12 +621,8 @@ Immensea
         fs::write(gamelogs_dir.join("truncated.txt"), "no header here\n").unwrap();
 
         let db = Db::open(&dir.path().join("t.db")).await.unwrap();
-        let mut app_settings = db.get_settings().await.unwrap();
-        app_settings.gamelogs_dir = Some(gamelogs_dir.to_string_lossy().to_string());
-        app_settings.fc_character = Some("FC Pilot".into());
-        db.set_settings(&app_settings).await.unwrap();
-
         let desk = RunDesk::new(db);
+        let inputs = enrichment_inputs(&gamelogs_dir, "FC Pilot");
 
         let manifest = "\
 New Null-Sec Incursion: 4MY-AB - Immensea
@@ -630,7 +651,7 @@ Immensea
 2026.07.29 23:14\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\tCONCORD rewarded FC Pilot for services performed.\n";
         desk.paste(Tray::Wallet, wallet).await.unwrap();
 
-        let focus = desk.analyze().await.unwrap();
+        let focus = desk.analyze(&inputs).await.unwrap();
         let enrichment = focus
             .enrichment
             .expect("enrichment should be attached to focus right after analyze");
@@ -650,19 +671,14 @@ Immensea
             enrichment.diagnostics
         );
 
-        // Re-enrich via amend without a run_id → re-enriches every run in the
+        // Re-enrich without a run_id → re-enriches every run in the
         // current scope (analyze focused Spawn, which holds this one run).
-        let refocused = desk
-            .amend(AmendOp::ReenrichRun { run_id: None })
-            .await
-            .unwrap();
+        let refocused = desk.reenrich(None, &inputs).await.unwrap();
         assert!(refocused.enrichment.is_some());
         assert!(refocused.sealed_run_id.is_some());
     }
 
-    /// `ReenrichRun { Some(id) }` re-enriches that run even when there is no
-    /// sealed run — proves the explicit-id path no longer depends on
-    /// `sealed_run_id` at all.
+    /// Explicit run id re-enriches that run even when there is no sealed run.
     #[tokio::test]
     async fn reenrich_run_with_explicit_id_works_when_sealed_is_none() {
         let dir = tempdir().unwrap();
@@ -681,16 +697,14 @@ Immensea
         .await
         .unwrap();
         let after = desk
-            .amend(AmendOp::ReenrichRun {
-                run_id: Some(run_id.clone()),
-            })
+            .reenrich(Some(run_id.clone()), &default_enrichment_inputs())
             .await
             .unwrap();
         assert!(after.enrichment.is_some());
         assert!(after.sealed_run_id.is_none());
     }
 
-    /// `ReenrichRun { None }` on a Spawn scope re-enriches every run in that
+    /// `reenrich(None)` on a Spawn scope re-enriches every run in that
     /// spawn — not just the last-sealed one — and reports how many
     /// succeeded via the top-strip diagnostic.
     #[tokio::test]
@@ -705,7 +719,7 @@ Immensea
 
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         desk.paste(Tray::Wallet, sample_wallet()).await.unwrap();
-        let focus2 = desk.analyze().await.unwrap();
+        let focus2 = desk.analyze(&default_enrichment_inputs()).await.unwrap();
         let run2 = focus2
             .catalog
             .runs
@@ -727,7 +741,7 @@ Immensea
         assert!(after.sealed_run_id.is_none());
 
         let after = desk
-            .amend(AmendOp::ReenrichRun { run_id: None })
+            .reenrich(None, &default_enrichment_inputs())
             .await
             .unwrap();
 
@@ -883,12 +897,16 @@ Immensea
     async fn missing_gamelogs_dir_warns_and_keeps_report() {
         let dir = tempdir().unwrap();
         let db = Db::open(&dir.path().join("t.db")).await.unwrap();
-        let mut app_settings = db.get_settings().await.unwrap();
-        app_settings.gamelogs_dir =
-            Some(dir.path().join("nope").join("Gamelogs").to_string_lossy().to_string());
-        db.set_settings(&app_settings).await.unwrap();
-
         let desk = RunDesk::new(db);
+        let inputs = EnrichmentInputs {
+            gamelogs_dir: dir
+                .path()
+                .join("nope")
+                .join("Gamelogs")
+                .to_string_lossy()
+                .to_string(),
+            ..EnrichmentInputs::default()
+        };
         let manifest = "\
 New Null-Sec Incursion: 4MY-AB - Immensea
 Constellation
@@ -902,7 +920,7 @@ Immensea
 2026.07.29 23:14\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\ty\n";
         desk.paste(Tray::Wallet, wallet).await.unwrap();
 
-        let focus = desk.analyze().await.unwrap();
+        let focus = desk.analyze(&inputs).await.unwrap();
 
         assert_eq!(focus.report.as_ref().unwrap().session.sites_ran, 2);
         let enrichment = focus
@@ -953,7 +971,7 @@ Immensea
         .await
         .unwrap();
         desk.paste(Tray::Wallet, sample_wallet()).await.unwrap();
-        desk.analyze().await.unwrap()
+        desk.analyze(&default_enrichment_inputs()).await.unwrap()
     }
 
     #[tokio::test]
@@ -995,7 +1013,7 @@ Immensea
         let run_a = first.catalog.runs[0].run_id.clone();
         // Re-stage wallet for second analyze (manifest still staged)
         desk.paste(Tray::Wallet, sample_wallet()).await.unwrap();
-        let second = desk.analyze().await.unwrap();
+        let second = desk.analyze(&default_enrichment_inputs()).await.unwrap();
         let run_b = second
             .catalog
             .runs

@@ -112,7 +112,7 @@ export function ToolsApp() {
 
   const ammoResult = useMemo(() => computeAmmoLoad(ammo), [ammo]);
 
-  const enrichPrelude = () => ({
+  const enrichmentInputs = () => ({
     gamelogsDir: gamelogsPath,
     fcCharacter,
     ammoLaunchers: ammo.launchers,
@@ -579,7 +579,7 @@ export function ToolsApp() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => void analyze(enrichPrelude())}
+                  onClick={() => void analyze(enrichmentInputs())}
                   className="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent"
                 >
                   Analyze
@@ -605,7 +605,7 @@ export function ToolsApp() {
               <button
                 type="button"
                 disabled={!canReenrich || enriching}
-                onClick={() => void reenrich(enrichPrelude())}
+                onClick={() => void reenrich(enrichmentInputs())}
                 className={cn(
                   "rounded border px-2 py-1 text-xs",
                   canReenrich && !enriching

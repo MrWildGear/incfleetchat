@@ -1,6 +1,6 @@
 import type {
   EditionFocus,
-  EnrichPrelude,
+  EnrichmentInputs,
   PayoutTicket,
   ReportScope,
   RunSettings,
@@ -31,7 +31,7 @@ export type RunDeskCmds = {
 /** Multi-step orchestration that composes cmds / side effects. */
 export type RunDeskOps = {
   importWallet(text: string, replace: boolean): Promise<EditionFocus>;
-  analyze(settings: RunSettings, prelude: EnrichPrelude): Promise<EditionFocus>;
+  analyze(settings: RunSettings, inputs: EnrichmentInputs): Promise<EditionFocus>;
   setSpaceAndFleet(
     current: RunSettings,
     space: SpaceBand,
@@ -39,31 +39,13 @@ export type RunDeskOps = {
   ): Promise<EditionFocus>;
   reenrich(
     runId: string | undefined,
-    prelude: EnrichPrelude,
+    inputs: EnrichmentInputs,
   ): Promise<EditionFocus>;
 };
 
 export type RunDeskClient = RunDeskOps & {
   cmds: RunDeskCmds;
 };
-
-async function persistPrelude(
-  invoke: DeskInvoke,
-  prelude: EnrichPrelude,
-): Promise<void> {
-  await invoke("set_settings", {
-    patch: {
-      gamelogs_dir: prelude.gamelogsDir.trim() || null,
-      fc_character: prelude.fcCharacter.trim() || null,
-    },
-  });
-  await invoke("set_settings", {
-    patch: {
-      ammo_launchers: prelude.ammoLaunchers,
-      ammo_per_launcher: prelude.ammoPerLauncher,
-    },
-  });
-}
 
 export function createRunDeskClient(invoke: DeskInvoke): RunDeskClient {
   const cmds: RunDeskCmds = {
@@ -115,10 +97,9 @@ export function createRunDeskClient(invoke: DeskInvoke): RunDeskClient {
       return cmds.paste("wallet", text);
     },
 
-    async analyze(settings, prelude) {
-      await persistPrelude(invoke, prelude);
+    async analyze(settings, inputs) {
       await cmds.setSessionSettings(settings);
-      return invoke<EditionFocus>("run_desk_analyze");
+      return invoke<EditionFocus>("run_desk_analyze", { inputs });
     },
 
     async setSpaceAndFleet(current, space, fleetSize) {
@@ -135,9 +116,8 @@ export function createRunDeskClient(invoke: DeskInvoke): RunDeskClient {
       });
     },
 
-    async reenrich(runId, prelude) {
-      await persistPrelude(invoke, prelude);
-      return invoke<EditionFocus>("run_desk_reenrich", { runId });
+    async reenrich(runId, inputs) {
+      return invoke<EditionFocus>("run_desk_reenrich", { runId, inputs });
     },
   };
 }
