@@ -40,23 +40,36 @@ pub struct Board {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Durable overlay prefs — Listener, chatlogs, always-on-top.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AppSettings {
+pub struct OverlaySettings {
     pub character: Option<String>,
     pub chatlogs_dir: Option<String>,
     pub always_on_top: bool,
+}
+
+impl Default for OverlaySettings {
+    fn default() -> Self {
+        Self {
+            character: None,
+            chatlogs_dir: None,
+            always_on_top: false,
+        }
+    }
+}
+
+/// Durable Tools prefs — gamelogs, FC, ammo fit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolsSettings {
     pub gamelogs_dir: Option<String>,
     pub fc_character: Option<String>,
     pub ammo_launchers: i64,
     pub ammo_per_launcher: i64,
 }
 
-impl Default for AppSettings {
+impl Default for ToolsSettings {
     fn default() -> Self {
         Self {
-            character: None,
-            chatlogs_dir: None,
-            always_on_top: false,
             gamelogs_dir: None,
             fc_character: None,
             ammo_launchers: 6,

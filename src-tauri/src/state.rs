@@ -9,7 +9,7 @@ use crate::board::build_board;
 use crate::db::Db;
 use crate::parse::parse_site_candidates;
 use crate::resolve::{fleet_log_id, list_characters, resolve_active_fleet_log};
-use crate::types::{AppSettings, Board, BoardStatus};
+use crate::types::{Board, BoardStatus, OverlaySettings};
 
 pub struct AppState {
     pub db: Db,
@@ -17,7 +17,7 @@ pub struct AppState {
 }
 
 struct Inner {
-    settings: AppSettings,
+    settings: OverlaySettings,
     board: Board,
     ran_ids: HashSet<String>,
     cleared_ids: HashSet<String>,
@@ -26,7 +26,10 @@ struct Inner {
 
 impl AppState {
     pub async fn new(db: Db) -> Result<Arc<Self>, String> {
-        let settings = db.get_settings().await.map_err(|e| e.to_string())?;
+        let settings = db
+            .get_overlay_settings()
+            .await
+            .map_err(|e| e.to_string())?;
         let ran_ids = db.load_ran_ids().await.map_err(|e| e.to_string())?;
         let cleared_ids = db.load_cleared_ids().await.map_err(|e| e.to_string())?;
         let state = Arc::new(Self {
@@ -52,7 +55,7 @@ impl AppState {
         self.inner.lock().board.clone()
     }
 
-    pub fn settings(&self) -> AppSettings {
+    pub fn overlay_settings(&self) -> OverlaySettings {
         self.inner.lock().settings.clone()
     }
 
@@ -64,17 +67,20 @@ impl AppState {
         default_chatlogs_dir()
     }
 
-    pub async fn set_settings(&self, patch: AppSettings) -> Result<AppSettings, String> {
+    pub async fn set_overlay_settings(
+        &self,
+        patch: OverlaySettings,
+    ) -> Result<OverlaySettings, String> {
         {
             let mut inner = self.inner.lock();
             inner.settings = patch.clone();
         }
         self.db
-            .set_settings(&patch)
+            .set_overlay_settings(&patch)
             .await
             .map_err(|e| e.to_string())?;
         self.refresh_board();
-        Ok(self.settings())
+        Ok(self.overlay_settings())
     }
 
     pub fn list_characters(&self) -> Result<Vec<String>, String> {

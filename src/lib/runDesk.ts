@@ -25,7 +25,6 @@ export type RunDeskCmds = {
   deleteRun(runId: string): Promise<EditionFocus>;
   deleteSpawn(constellation: string): Promise<EditionFocus>;
   clearAll(): Promise<EditionFocus>;
-  patchAppSettings(patch: Record<string, unknown>): Promise<void>;
 };
 
 /** Multi-step orchestration that composes cmds / side effects. */
@@ -81,10 +80,6 @@ export function createRunDeskClient(invoke: DeskInvoke): RunDeskClient {
       invoke<EditionFocus>("run_desk_delete_spawn", { constellation }),
 
     clearAll: () => invoke<EditionFocus>("run_desk_clear_all"),
-
-    async patchAppSettings(patch) {
-      await invoke("set_settings", { patch });
-    },
   };
 
   return {

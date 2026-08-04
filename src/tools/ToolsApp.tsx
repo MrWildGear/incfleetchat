@@ -10,13 +10,12 @@ import {
 import type { SpaceBand } from "../lib/runDeskTypes";
 import { joinAnalytics } from "../lib/joinedResults";
 import { activeOnly, isActive, of, sum } from "../lib/missileRates";
+import {
+  getToolsSettings,
+  setToolsSettings,
+} from "../lib/toolsSettings";
 import { cn } from "../lib/utils";
 import { useRunDesk } from "./useRunDesk";
-
-type ToolsSettings = {
-  gamelogs_dir: string | null;
-  fc_character: string | null;
-};
 
 type Tab = "analytics" | "ammo";
 
@@ -98,17 +97,9 @@ export function ToolsApp() {
     deleteRun,
     deleteSpawn,
     clearAll,
-    patchAppSettings,
   } = useRunDesk();
 
-  const [ammo, setAmmo] = useState(() => {
-    try {
-      const raw = localStorage.getItem("incfleetchat.ammo");
-      return raw ? { ...defaultAmmo, ...JSON.parse(raw) } : defaultAmmo;
-    } catch {
-      return defaultAmmo;
-    }
-  });
+  const [ammo, setAmmo] = useState(defaultAmmo);
 
   const ammoResult = useMemo(() => computeAmmoLoad(ammo), [ammo]);
 
@@ -120,22 +111,30 @@ export function ToolsApp() {
   });
 
   useEffect(() => {
-    localStorage.setItem("incfleetchat.ammo", JSON.stringify(ammo));
-  }, [ammo]);
-
-  useEffect(() => {
     void open();
-    void invoke<ToolsSettings>("get_settings").then((s) => {
+    void getToolsSettings((cmd, args) =>
+      args === undefined ? invoke(cmd) : invoke(cmd, args),
+    ).then((s) => {
       setGamelogsPath(s.gamelogs_dir ?? "");
       setFcCharacter(s.fc_character ?? "");
+      setAmmo((prev) => ({
+        ...prev,
+        launchers: s.ammo_launchers,
+        ammoPerLauncher: s.ammo_per_launcher,
+      }));
     });
   }, [open]);
 
-  async function persistToolsSettings() {
-    await patchAppSettings({
-      gamelogs_dir: gamelogsPath.trim() || null,
-      fc_character: fcCharacter.trim() || null,
-    });
+  async function persistToolsSettings(patch: {
+    gamelogs_dir?: string | null;
+    fc_character?: string | null;
+    ammo_launchers?: number;
+    ammo_per_launcher?: number;
+  }) {
+    await setToolsSettings(
+      (cmd, args) => (args === undefined ? invoke(cmd) : invoke(cmd, args)),
+      patch,
+    );
   }
 
   async function onImportWallet(replace: boolean) {
@@ -494,7 +493,11 @@ export function ToolsApp() {
                 className="ml-2 w-56 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
                 value={gamelogsPath}
                 onChange={(e) => setGamelogsPath(e.target.value)}
-                onBlur={() => void persistToolsSettings()}
+                onBlur={() =>
+                  void persistToolsSettings({
+                    gamelogs_dir: gamelogsPath.trim() || null,
+                  })
+                }
                 placeholder="Documents\EVE\logs\Gamelogs"
               />
             </label>
@@ -504,7 +507,11 @@ export function ToolsApp() {
                 className="ml-2 w-32 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
                 value={fcCharacter}
                 onChange={(e) => setFcCharacter(e.target.value)}
-                onBlur={() => void persistToolsSettings()}
+                onBlur={() =>
+                  void persistToolsSettings({
+                    fc_character: fcCharacter.trim() || null,
+                  })
+                }
                 placeholder="FC Pilot"
               />
             </label>
@@ -1203,11 +1210,15 @@ export function ToolsApp() {
             label="Launchers"
             value={ammo.launchers}
             onChange={(n) => setAmmo({ ...ammo, launchers: n })}
+            onCommit={(n) => void persistToolsSettings({ ammo_launchers: n })}
           />
           <AmmoField
             label="Ammo per launcher"
             value={ammo.ammoPerLauncher}
             onChange={(n) => setAmmo({ ...ammo, ammoPerLauncher: n })}
+            onCommit={(n) =>
+              void persistToolsSettings({ ammo_per_launcher: n })
+            }
           />
           <Row
             label="Missiles per cycle"
@@ -1259,11 +1270,13 @@ function AmmoField({
   label,
   value,
   onChange,
+  onCommit,
   step = 1,
 }: {
   label: string;
   value: number;
   onChange: (n: number) => void;
+  onCommit?: (n: number) => void;
   step?: number;
 }) {
   return (
@@ -1275,6 +1288,7 @@ function AmmoField({
         className="w-36 rounded border border-border bg-surface-raised px-2 py-1 text-right text-fg"
         value={value}
         onChange={(e) => onChange(Number(e.target.value) || 0)}
+        onBlur={(e) => onCommit?.(Number(e.target.value) || 0)}
       />
     </label>
   );

@@ -7,7 +7,7 @@ use crate::db::Db;
 use crate::enrichment_pipeline::EnrichmentInputs;
 use crate::run_desk::RunDesk;
 use crate::state::{default_chatlogs_dir, AppState};
-use crate::types::{AppSettings, Board};
+use crate::types::{Board, OverlaySettings, ToolsSettings};
 use crate::watch;
 
 #[tauri::command]
@@ -45,28 +45,26 @@ async fn clear_ready(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<
 }
 
 #[tauri::command]
-async fn get_settings(state: State<'_, Arc<AppState>>) -> Result<AppSettings, String> {
-    Ok(state.settings())
+async fn get_overlay_settings(
+    state: State<'_, Arc<AppState>>,
+) -> Result<OverlaySettings, String> {
+    Ok(state.overlay_settings())
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct SettingsPatch {
+pub struct OverlaySettingsPatch {
     pub character: Option<Option<String>>,
     pub chatlogs_dir: Option<Option<String>>,
     pub always_on_top: Option<bool>,
-    pub gamelogs_dir: Option<Option<String>>,
-    pub fc_character: Option<Option<String>>,
-    pub ammo_launchers: Option<i64>,
-    pub ammo_per_launcher: Option<i64>,
 }
 
 #[tauri::command]
-async fn set_settings(
+async fn set_overlay_settings(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
-    patch: SettingsPatch,
-) -> Result<AppSettings, String> {
-    let mut next = state.settings();
+    patch: OverlaySettingsPatch,
+) -> Result<OverlaySettings, String> {
+    let mut next = state.overlay_settings();
     if let Some(c) = patch.character {
         next.character = c;
     }
@@ -79,6 +77,38 @@ async fn set_settings(
             let _ = win.set_always_on_top(a);
         }
     }
+    let settings = state.set_overlay_settings(next).await?;
+    let _ = app.emit("board-updated", state.board());
+    Ok(settings)
+}
+
+#[tauri::command]
+async fn get_tools_settings(state: State<'_, Arc<AppState>>) -> Result<ToolsSettings, String> {
+    state
+        .db
+        .get_tools_settings()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ToolsSettingsPatch {
+    pub gamelogs_dir: Option<Option<String>>,
+    pub fc_character: Option<Option<String>>,
+    pub ammo_launchers: Option<i64>,
+    pub ammo_per_launcher: Option<i64>,
+}
+
+#[tauri::command]
+async fn set_tools_settings(
+    state: State<'_, Arc<AppState>>,
+    patch: ToolsSettingsPatch,
+) -> Result<ToolsSettings, String> {
+    let mut next = state
+        .db
+        .get_tools_settings()
+        .await
+        .map_err(|e| e.to_string())?;
     if let Some(d) = patch.gamelogs_dir {
         next.gamelogs_dir = d;
     }
@@ -91,9 +121,12 @@ async fn set_settings(
     if let Some(a) = patch.ammo_per_launcher {
         next.ammo_per_launcher = a;
     }
-    let settings = state.set_settings(next).await?;
-    let _ = app.emit("board-updated", state.board());
-    Ok(settings)
+    state
+        .db
+        .set_tools_settings(&next)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(next)
 }
 
 #[tauri::command]
@@ -107,9 +140,9 @@ async fn set_always_on_top(
     state: State<'_, Arc<AppState>>,
     on: bool,
 ) -> Result<(), String> {
-    let mut s = state.settings();
+    let mut s = state.overlay_settings();
     s.always_on_top = on;
-    state.set_settings(s).await?;
+    state.set_overlay_settings(s).await?;
     if let Some(win) = app.get_webview_window("main") {
         win.set_always_on_top(on).map_err(|e| e.to_string())?;
     }
@@ -238,7 +271,7 @@ pub fn run_app() {
             })?;
 
             let _ = default_chatlogs_dir();
-            let settings = state.settings();
+            let settings = state.overlay_settings();
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_always_on_top(settings.always_on_top);
             }
@@ -253,8 +286,10 @@ pub fn run_app() {
             mark_ran,
             clear_site,
             clear_ready,
-            get_settings,
-            set_settings,
+            get_overlay_settings,
+            set_overlay_settings,
+            get_tools_settings,
+            set_tools_settings,
             list_characters,
             set_always_on_top,
             refresh_board,

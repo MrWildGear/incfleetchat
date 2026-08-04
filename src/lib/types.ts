@@ -24,7 +24,7 @@ export type Board = {
   updated_at: string;
 };
 
-export type AppSettings = {
+export type OverlaySettings = {
   character: string | null;
   chatlogs_dir: string | null;
   always_on_top: boolean;

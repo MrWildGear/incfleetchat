@@ -15,7 +15,7 @@ use crate::gamelog_scan::{default_gamelogs_dir, scan_gamelogs, ScanResult};
 use crate::timing::{AnalyticsReport, RunSettings};
 use crate::wallet_parse::{extract_wallet_fc_hint, parse_wallet_journal};
 
-/// Run-time bag for one enrich/reenrich — not AppSettings.
+/// Run-time bag for one enrich/reenrich — not Tools settings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrichmentInputs {

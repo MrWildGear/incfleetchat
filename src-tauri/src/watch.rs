@@ -65,7 +65,7 @@ fn event_touches_fleet(chatlogs: &PathBuf, event: &Event) -> bool {
 mod tests {
     use super::*;
     use crate::db::Db;
-    use crate::types::AppSettings;
+    use crate::types::OverlaySettings;
     use std::fs;
     use std::thread;
     use tempfile::tempdir;
@@ -88,11 +88,10 @@ mod tests {
         let db = Db::open(&dir.path().join("app.db")).await.unwrap();
         let state = AppState::new(db).await.unwrap();
         state
-            .set_settings(AppSettings {
+            .set_overlay_settings(OverlaySettings {
                 character: Some("Test Pilot".into()),
                 chatlogs_dir: Some(dir.path().to_string_lossy().to_string()),
                 always_on_top: false,
-                ..Default::default()
             })
             .await
             .unwrap();

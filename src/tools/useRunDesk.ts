@@ -40,7 +40,6 @@ export type UseRunDeskResult = {
   deleteRun: (runId: string) => Promise<void>;
   deleteSpawn: (constellation: string) => Promise<void>;
   clearAll: () => Promise<void>;
-  patchAppSettings: (patch: Record<string, unknown>) => Promise<void>;
   setError: (message: string | null) => void;
 };
 
@@ -225,18 +224,6 @@ export function useRunDesk(): UseRunDeskResult {
     }
   }, [applyFocus, client]);
 
-  const patchAppSettings = useCallback(
-    async (patch: Record<string, unknown>) => {
-      try {
-        await client.cmds.patchAppSettings(patch);
-      } catch (e) {
-        setError(String(e));
-        throw e;
-      }
-    },
-    [client],
-  );
-
   return {
     focus,
     error,
@@ -258,7 +245,6 @@ export function useRunDesk(): UseRunDeskResult {
     deleteRun,
     deleteSpawn,
     clearAll,
-    patchAppSettings,
     setError,
   };
 }

@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::analytics_types::{Catalog, EnrichmentSnapshot, RunSummary, SpawnSummary};
 use crate::spawn_parse::SpawnDraft;
 use crate::timing::{AnalyticsReport, RunSettings};
-use crate::types::AppSettings;
+use crate::types::{OverlaySettings, ToolsSettings};
 
 #[derive(Clone)]
 pub struct Db {
@@ -331,34 +331,51 @@ impl Db {
         Ok(ReportRows::from_rows(rows))
     }
 
-    pub async fn get_settings(&self) -> Result<AppSettings, sqlx::Error> {
-        let row: (Option<String>, Option<String>, i64, Option<String>, Option<String>, i64, i64) =
-            sqlx::query_as(
-                "SELECT character, chatlogs_dir, always_on_top, gamelogs_dir, fc_character, \
-                 ammo_launchers, ammo_per_launcher FROM settings WHERE id = 1",
-            )
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(AppSettings {
+    pub async fn get_overlay_settings(&self) -> Result<OverlaySettings, sqlx::Error> {
+        let row: (Option<String>, Option<String>, i64) = sqlx::query_as(
+            "SELECT character, chatlogs_dir, always_on_top FROM settings WHERE id = 1",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(OverlaySettings {
             character: row.0,
             chatlogs_dir: row.1,
             always_on_top: row.2 != 0,
-            gamelogs_dir: row.3,
-            fc_character: row.4,
-            ammo_launchers: row.5,
-            ammo_per_launcher: row.6,
         })
     }
 
-    pub async fn set_settings(&self, settings: &AppSettings) -> Result<(), sqlx::Error> {
+    pub async fn set_overlay_settings(&self, settings: &OverlaySettings) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE settings SET character = ?, chatlogs_dir = ?, always_on_top = ?, \
-             gamelogs_dir = ?, fc_character = ?, ammo_launchers = ?, ammo_per_launcher = ? \
-             WHERE id = 1",
+            "UPDATE settings SET character = ?, chatlogs_dir = ?, always_on_top = ? WHERE id = 1",
         )
         .bind(&settings.character)
         .bind(&settings.chatlogs_dir)
         .bind(if settings.always_on_top { 1 } else { 0 })
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_tools_settings(&self) -> Result<ToolsSettings, sqlx::Error> {
+        let row: (Option<String>, Option<String>, i64, i64) = sqlx::query_as(
+            "SELECT gamelogs_dir, fc_character, ammo_launchers, ammo_per_launcher \
+             FROM settings WHERE id = 1",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(ToolsSettings {
+            gamelogs_dir: row.0,
+            fc_character: row.1,
+            ammo_launchers: row.2,
+            ammo_per_launcher: row.3,
+        })
+    }
+
+    pub async fn set_tools_settings(&self, settings: &ToolsSettings) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE settings SET gamelogs_dir = ?, fc_character = ?, ammo_launchers = ?, \
+             ammo_per_launcher = ? WHERE id = 1",
+        )
         .bind(&settings.gamelogs_dir)
         .bind(&settings.fc_character)
         .bind(settings.ammo_launchers)
@@ -584,13 +601,13 @@ mod tests {
     async fn settings_and_ran_round_trip() {
         let dir = tempdir().unwrap();
         let db = Db::open(&dir.path().join("app.db")).await.unwrap();
-        let mut s = db.get_settings().await.unwrap();
+        let mut s = db.get_overlay_settings().await.unwrap();
         assert!(s.character.is_none());
         s.character = Some("Estemaire".into());
         s.chatlogs_dir = Some("C:/logs".into());
         s.always_on_top = true;
-        db.set_settings(&s).await.unwrap();
-        let loaded = db.get_settings().await.unwrap();
+        db.set_overlay_settings(&s).await.unwrap();
+        let loaded = db.get_overlay_settings().await.unwrap();
         assert_eq!(loaded.character.as_deref(), Some("Estemaire"));
         assert!(loaded.always_on_top);
 
@@ -608,7 +625,7 @@ mod tests {
     async fn settings_gamelog_and_ammo_fields_default_and_round_trip() {
         let dir = tempdir().unwrap();
         let db = Db::open(&dir.path().join("app.db")).await.unwrap();
-        let mut s = db.get_settings().await.unwrap();
+        let mut s = db.get_tools_settings().await.unwrap();
         assert_eq!(s.ammo_launchers, 6);
         assert_eq!(s.ammo_per_launcher, 26);
         assert!(s.gamelogs_dir.is_none());
@@ -618,13 +635,18 @@ mod tests {
         s.fc_character = Some("FC Pilot".into());
         s.ammo_launchers = 7;
         s.ammo_per_launcher = 20;
-        db.set_settings(&s).await.unwrap();
+        db.set_tools_settings(&s).await.unwrap();
 
-        let loaded = db.get_settings().await.unwrap();
+        let loaded = db.get_tools_settings().await.unwrap();
         assert_eq!(loaded.gamelogs_dir.as_deref(), Some("C:/EVE/logs/Gamelogs"));
         assert_eq!(loaded.fc_character.as_deref(), Some("FC Pilot"));
         assert_eq!(loaded.ammo_launchers, 7);
         assert_eq!(loaded.ammo_per_launcher, 20);
+
+        // Overlay columns unchanged by tools write
+        let overlay = db.get_overlay_settings().await.unwrap();
+        assert!(overlay.character.is_none());
+        assert!(!overlay.always_on_top);
     }
 
     #[tokio::test]

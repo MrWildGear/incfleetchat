@@ -1,12 +1,12 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AppSettings, Board } from "./lib/types";
+import type { Board, OverlaySettings } from "./lib/types";
 import { emptyBoard } from "./lib/types";
 
 type Store = {
   board: Board;
-  settings: AppSettings | null;
+  settings: OverlaySettings | null;
   characters: string[];
   settingsOpen: boolean;
   nowMs: number;
@@ -38,7 +38,7 @@ export const useAppStore = create<Store>((set, get) => ({
   hydrate: async () => {
     const [board, settings] = await Promise.all([
       invoke<Board>("get_board"),
-      invoke<AppSettings>("get_settings"),
+      invoke<OverlaySettings>("get_overlay_settings"),
     ]);
     set({
       board,
@@ -70,7 +70,9 @@ export const useAppStore = create<Store>((set, get) => ({
     if ("character" in patch) payload.character = patch.character;
     if ("chatlogs_dir" in patch) payload.chatlogs_dir = patch.chatlogs_dir;
     if ("always_on_top" in patch) payload.always_on_top = patch.always_on_top;
-    const settings = await invoke<AppSettings>("set_settings", { patch: payload });
+    const settings = await invoke<OverlaySettings>("set_overlay_settings", {
+      patch: payload,
+    });
     set({ settings, settingsOpen: false });
     const board = await invoke<Board>("get_board");
     set({ board });

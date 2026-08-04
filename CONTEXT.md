@@ -87,8 +87,8 @@ The orchestration that takes Enrichment inputs, scans gamelogs, runs enrichment,
 _Avoid_: enrichment (the math), RunDesk (owns session, not this job)
 
 **Enrichment inputs**:
-The run-time bag the Enrichment pipeline needs for one enrich/reenrich: gamelogs directory, FC character, launchers, and ammo per launcher — not AppSettings and not a persist-before-enrich prelude.
-_Avoid_: EnrichPrelude, prelude, AppSettings (when meaning enrich-time fit)
+The run-time bag the Enrichment pipeline needs for one enrich/reenrich: gamelogs directory, FC character, launchers, and ammo per launcher — not Tools settings and not a persist-before-enrich prelude.
+_Avoid_: EnrichPrelude, prelude, Tools settings (when meaning enrich-time fit), AppSettings
 
 **Aggregate enrichment**:
 Merging per-run enrichment snapshots into one snapshot for Spawn or Overall focus, without re-scanning gamelogs.
@@ -127,5 +127,13 @@ _Avoid_: missileDerived, missile helpers
 ### Ammo
 
 **Ammo planner**:
-The Tools Ammo tab math for stock, launchers, and load-into-ship — outside RunDesk.
+The Tools Ammo tab math for stock, launchers, and load-into-ship — outside RunDesk. Durable launcher/ammo prefs live in Tools settings (not localStorage).
 _Avoid_: RunDesk (ammo does not go through it)
+
+**Overlay settings**:
+Durable overlay prefs: Listener, chatlogs directory, always-on-top. Edits may refresh the Board.
+_Avoid_: AppSettings, settings (when meaning only overlay)
+
+**Tools settings**:
+Durable Tools prefs: gamelogs directory, FC character, ammo launchers, ammo per launcher. Edits must not refresh the Board.
+_Avoid_: AppSettings, Enrichment inputs (run-time bag), localStorage ammo
