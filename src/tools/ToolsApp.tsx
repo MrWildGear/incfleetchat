@@ -361,9 +361,9 @@ export function ToolsApp() {
       const e = enrichmentByTime.get(s.occurred_at);
       const siteSum = sumMissileStats(e?.missiles ?? []);
       const hitPct =
-        siteSum.expended === 0 ? null : siteSum.hits / siteSum.expended;
-      const missPct =
         siteSum.expended === 0 ? null : siteSum.dead / siteSum.expended;
+      const missPct =
+        siteSum.expended === 0 ? null : siteSum.hits / siteSum.expended;
       return { s, e, siteSum, hitPct, missPct, index };
     });
     const { key, dir } = siteSort;
@@ -956,7 +956,7 @@ export function ToolsApp() {
                     value={formatPercent(
                       fleetMissileSum.expended === 0
                         ? null
-                        : fleetMissileSum.hits / fleetMissileSum.expended,
+                        : fleetMissileSum.dead / fleetMissileSum.expended,
                     )}
                   />
                   <Row
@@ -964,7 +964,7 @@ export function ToolsApp() {
                     value={formatPercent(
                       fleetMissileSum.expended === 0
                         ? null
-                        : fleetMissileSum.dead / fleetMissileSum.expended,
+                        : fleetMissileSum.hits / fleetMissileSum.expended,
                     )}
                   />
                   <p className="text-[10px] text-muted">
@@ -1275,14 +1275,14 @@ export function ToolsApp() {
                           {formatPercent(
                             siteDrillSum.expended === 0
                               ? null
-                              : siteDrillSum.hits / siteDrillSum.expended,
+                              : siteDrillSum.dead / siteDrillSum.expended,
                           )}
                         </td>
                         <td className="px-2 py-1">
                           {formatPercent(
                             siteDrillSum.expended === 0
                               ? null
-                              : siteDrillSum.dead / siteDrillSum.expended,
+                              : siteDrillSum.hits / siteDrillSum.expended,
                           )}
                         </td>
                       </tr>
@@ -1354,14 +1354,14 @@ export function ToolsApp() {
                           {formatPercent(
                             siteDrillSum.expended === 0
                               ? null
-                              : siteDrillSum.hits / siteDrillSum.expended,
+                              : siteDrillSum.dead / siteDrillSum.expended,
                           )}
                         </td>
                         <td className="px-2 py-1">
                           {formatPercent(
                             siteDrillSum.expended === 0
                               ? null
-                              : siteDrillSum.dead / siteDrillSum.expended,
+                              : siteDrillSum.hits / siteDrillSum.expended,
                           )}
                         </td>
                       </tr>

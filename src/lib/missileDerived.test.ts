@@ -19,18 +19,18 @@ describe("missileDerived", () => {
     expect(deadVolleys({ dead: 5, launchers: 6 })).toBe(0);
   });
 
-  it("hitRate is hits/expended; missRate is dead/expended; null when expended is 0", () => {
+  it("hitRate is dead/expended; missRate is hits/expended; null when expended is 0", () => {
     expect(
-      hitRate({ hits: 100, reload_cycles: 2, missiles_per_cycle: 156 }),
-    ).toBeCloseTo(100 / 312);
-    expect(
-      missRate({ dead: 212, reload_cycles: 2, missiles_per_cycle: 156 }),
+      hitRate({ dead: 212, reload_cycles: 2, missiles_per_cycle: 156 }),
     ).toBeCloseTo(212 / 312);
     expect(
-      hitRate({ hits: 0, reload_cycles: 0, missiles_per_cycle: 156 }),
+      missRate({ hits: 100, reload_cycles: 2, missiles_per_cycle: 156 }),
+    ).toBeCloseTo(100 / 312);
+    expect(
+      hitRate({ dead: 0, reload_cycles: 0, missiles_per_cycle: 156 }),
     ).toBeNull();
     expect(
-      missRate({ dead: 0, reload_cycles: 0, missiles_per_cycle: 156 }),
+      missRate({ hits: 0, reload_cycles: 0, missiles_per_cycle: 156 }),
     ).toBeNull();
   });
 

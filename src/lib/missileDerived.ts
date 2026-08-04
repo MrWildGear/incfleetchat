@@ -14,22 +14,22 @@ export function deadVolleys(
   return Math.floor(m.dead / m.launchers);
 }
 
-/** Hit % = hits / expended (combat hit share). */
+/** Hit % = dead / expended (inferred missed-ammo share). */
 export function hitRate(
-  m: Pick<MissileStat, "hits" | "reload_cycles" | "missiles_per_cycle">,
-): number | null {
-  const e = expended(m);
-  if (e === 0) return null;
-  return m.hits / e;
-}
-
-/** Miss % = dead / expended (inferred missed ammo share). */
-export function missRate(
   m: Pick<MissileStat, "dead" | "reload_cycles" | "missiles_per_cycle">,
 ): number | null {
   const e = expended(m);
   if (e === 0) return null;
   return m.dead / e;
+}
+
+/** Miss % = hits / expended (combat hit-line share). */
+export function missRate(
+  m: Pick<MissileStat, "hits" | "reload_cycles" | "missiles_per_cycle">,
+): number | null {
+  const e = expended(m);
+  if (e === 0) return null;
+  return m.hits / e;
 }
 
 export function formatPercent(rate: number | null): string {
