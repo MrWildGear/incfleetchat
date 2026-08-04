@@ -28,6 +28,30 @@ type ToolsSettings = {
 
 type Tab = "analytics" | "ammo";
 
+type SiteSortKey =
+  | "time"
+  | "duration"
+  | "break"
+  | "approach"
+  | "combat"
+  | "hitPct"
+  | "missPct";
+
+type SiteSort = { key: SiteSortKey; dir: "asc" | "desc" };
+
+const defaultSiteSort: SiteSort = { key: "time", dir: "asc" };
+
+function compareNullableNumber(
+  a: number | null,
+  b: number | null,
+  sign: number,
+): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return (a - b) * sign;
+}
+
 function formatDuration(seconds: number | null | undefined): string {
   if (seconds == null || !Number.isFinite(seconds)) return "—";
   const s = Math.round(seconds);
@@ -57,6 +81,7 @@ export function ToolsApp() {
     level: 1 | 2;
     occurredAt: string;
   }>(null);
+  const [siteSort, setSiteSort] = useState<SiteSort>(defaultSiteSort);
   const [showListeners, setShowListeners] = useState(false);
   const [showEnrichLog, setShowEnrichLog] = useState(false);
   const [gamelogsPath, setGamelogsPath] = useState("");
@@ -330,6 +355,59 @@ export function ToolsApp() {
     for (const s of focus?.enrichment?.sites ?? []) map.set(s.occurred_at, s);
     return map;
   }, [focus?.enrichment]);
+  const sortedSiteRows = useMemo(() => {
+    const sites = focus?.report?.sites ?? [];
+    const rows = sites.map((s, index) => {
+      const e = enrichmentByTime.get(s.occurred_at);
+      const siteSum = sumMissileStats(e?.missiles ?? []);
+      const hitPct =
+        siteSum.expended === 0 ? null : siteSum.dead / siteSum.expended;
+      const missPct =
+        siteSum.expended === 0 ? null : siteSum.hits / siteSum.expended;
+      return { s, e, siteSum, hitPct, missPct, index };
+    });
+    const { key, dir } = siteSort;
+    const sign = dir === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      let cmp = 0;
+      switch (key) {
+        case "time":
+          cmp = (Date.parse(a.s.occurred_at) - Date.parse(b.s.occurred_at)) * sign;
+          break;
+        case "duration":
+          cmp = compareNullableNumber(
+            a.s.duration_seconds ?? null,
+            b.s.duration_seconds ?? null,
+            sign,
+          );
+          break;
+        case "break":
+          cmp = (Number(a.s.is_break) - Number(b.s.is_break)) * sign;
+          break;
+        case "approach":
+          cmp = compareNullableNumber(
+            a.e?.approach_seconds ?? null,
+            b.e?.approach_seconds ?? null,
+            sign,
+          );
+          break;
+        case "combat":
+          cmp = compareNullableNumber(
+            a.e?.combat_to_payout_seconds ?? null,
+            b.e?.combat_to_payout_seconds ?? null,
+            sign,
+          );
+          break;
+        case "hitPct":
+          cmp = compareNullableNumber(a.hitPct, b.hitPct, sign);
+          break;
+        case "missPct":
+          cmp = compareNullableNumber(a.missPct, b.missPct, sign);
+          break;
+      }
+      return cmp === 0 ? a.index - b.index : cmp;
+    });
+  }, [focus?.report?.sites, enrichmentByTime, siteSort]);
   const siteDrillEnrich = siteDrill
     ? focus?.enrichment?.sites.find(
         (x) => x.occurred_at === siteDrill.occurredAt,
@@ -1053,29 +1131,57 @@ export function ToolsApp() {
                   <table className="w-full text-left text-xs">
                     <thead className="sticky top-0 z-10 bg-surface text-muted">
                       <tr>
-                        <th className="px-2 py-1">Time</th>
-                        <th className="px-2 py-1">Duration</th>
-                        <th className="px-2 py-1">Break?</th>
-                        <th className="px-2 py-1">ISK</th>
-                        <th className="px-2 py-1">LP</th>
-                        <th className="px-2 py-1">Approach</th>
-                        <th className="px-2 py-1">Combat→payout</th>
-                        <th className="px-2 py-1">Source</th>
-                        <th className="px-2 py-1">Hit %</th>
-                        <th className="px-2 py-1">Miss %</th>
+                        {(
+                          [
+                            ["time", "Time"],
+                            ["duration", "Duration"],
+                            ["break", "Break?"],
+                            ["approach", "Approach"],
+                            ["combat", "Combat→payout"],
+                            ["hitPct", "Hit %"],
+                            ["missPct", "Miss %"],
+                          ] as const
+                        ).map(([key, label]) => {
+                          const active = siteSort.key === key;
+                          const marker = !active
+                            ? ""
+                            : siteSort.dir === "asc"
+                              ? " ↑"
+                              : " ↓";
+                          return (
+                            <th key={key} className="px-2 py-1">
+                              <button
+                                type="button"
+                                className="hover:text-accent"
+                                onClick={() =>
+                                  setSiteSort((prev) =>
+                                    prev.key === key
+                                      ? {
+                                          key,
+                                          dir:
+                                            prev.dir === "asc" ? "desc" : "asc",
+                                        }
+                                      : { key, dir: "asc" },
+                                  )
+                                }
+                              >
+                                {label}
+                                {marker}
+                              </button>
+                            </th>
+                          );
+                        })}
                       </tr>
                     </thead>
                     <tbody>
-                      {focus.report.sites.map((s, i) => {
-                        const e = enrichmentByTime.get(s.occurred_at);
-                        const siteSum = sumMissileStats(e?.missiles ?? []);
+                      {sortedSiteRows.map(({ s, e, hitPct, missPct, index }) => {
                         const canDrill =
                           focus.scope.kind === "run" &&
                           !!e &&
                           e.missiles.some(hasMissileActivity);
                         return (
                           <tr
-                            key={i}
+                            key={index}
                             className="border-t border-border"
                             onClick={
                               canDrill
@@ -1098,10 +1204,6 @@ export function ToolsApp() {
                               {s.is_break ? "yes" : ""}
                             </td>
                             <td className="px-2 py-1">
-                              {formatIskMoney(s.amount_isk)}
-                            </td>
-                            <td className="px-2 py-1">{formatLp(s.fleet_lp)}</td>
-                            <td className="px-2 py-1">
                               {e ? formatDuration(e.approach_seconds) : "—"}
                             </td>
                             <td className="px-2 py-1">
@@ -1109,20 +1211,11 @@ export function ToolsApp() {
                                 ? formatDuration(e.combat_to_payout_seconds)
                                 : "—"}
                             </td>
-                            <td className="px-2 py-1">{e ? e.source : "—"}</td>
                             <td className="px-2 py-1">
-                              {formatPercent(
-                                siteSum.expended === 0
-                                  ? null
-                                  : siteSum.dead / siteSum.expended,
-                              )}
+                              {formatPercent(hitPct)}
                             </td>
                             <td className="px-2 py-1">
-                              {formatPercent(
-                                siteSum.expended === 0
-                                  ? null
-                                  : siteSum.hits / siteSum.expended,
-                              )}
+                              {formatPercent(missPct)}
                             </td>
                           </tr>
                         );
