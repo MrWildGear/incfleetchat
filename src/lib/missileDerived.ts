@@ -6,12 +6,19 @@ export function expended(
   return m.reload_cycles * m.missiles_per_cycle;
 }
 
-/** Full volleys of wasted ammo: floor(dead / launchers). */
+/**
+ * Assumed volleys from reloads, minus combat hit lines.
+ * expended_volleys = floor(expended / launchers); dead_volleys = max(0, expended_volleys − hits).
+ */
 export function deadVolleys(
-  m: Pick<MissileStat, "dead" | "launchers">,
+  m: Pick<
+    MissileStat,
+    "reload_cycles" | "missiles_per_cycle" | "launchers" | "hits"
+  >,
 ): number {
   if (m.launchers === 0) return 0;
-  return Math.floor(m.dead / m.launchers);
+  const expendedVolleys = Math.floor(expended(m) / m.launchers);
+  return Math.max(0, expendedVolleys - m.hits);
 }
 
 /** Hit % = dead / expended (inferred missed-ammo share). */

@@ -13,10 +13,24 @@ describe("missileDerived", () => {
     expect(expended({ reload_cycles: 2, missiles_per_cycle: 156 })).toBe(312);
   });
 
-  it("deadVolleys is floor(dead / launchers)", () => {
-    expect(deadVolleys({ dead: 212, launchers: 6 })).toBe(35);
-    expect(deadVolleys({ dead: 312, launchers: 6 })).toBe(52);
-    expect(deadVolleys({ dead: 5, launchers: 6 })).toBe(0);
+  it("deadVolleys is expended_volleys minus hits", () => {
+    // 2×156/6 = 52 volleys − 35 hits = 17
+    expect(
+      deadVolleys({
+        reload_cycles: 2,
+        missiles_per_cycle: 156,
+        launchers: 6,
+        hits: 35,
+      }),
+    ).toBe(17);
+    expect(
+      deadVolleys({
+        reload_cycles: 2,
+        missiles_per_cycle: 156,
+        launchers: 6,
+        hits: 100,
+      }),
+    ).toBe(0); // saturates at 0 when hits >= expended volleys
   });
 
   it("hitRate is dead/expended; missRate is hits/expended; null when expended is 0", () => {
@@ -45,24 +59,25 @@ describe("missileDerived", () => {
       {
         listener: "A",
         reload_cycles: 2,
-        hits: 100,
+        hits: 35,
         missiles_per_cycle: 156,
         launchers: 6,
-        dead: 212,
+        dead: 277,
       },
       {
         listener: "B",
         reload_cycles: 1,
-        hits: 50,
+        hits: 10,
         missiles_per_cycle: 100,
         launchers: 5,
-        dead: 50,
+        dead: 90,
       },
     ]);
     expect(sum.reload_cycles).toBe(3);
-    expect(sum.hits).toBe(150);
-    expect(sum.dead).toBe(262);
+    expect(sum.hits).toBe(45);
+    expect(sum.dead).toBe(367);
     expect(sum.expended).toBe(312 + 100);
-    expect(sum.dead_volleys).toBe(35 + 10); // floor(212/6)+floor(50/5)
+    // A: floor(312/6)-35 = 17; B: floor(100/5)-10 = 10
+    expect(sum.dead_volleys).toBe(17 + 10);
   });
 });
