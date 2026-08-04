@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { formatCount, formatIskMoney, formatLp } from "./formatAnalytics";
+import {
+  formatCount,
+  formatIskMoney,
+  formatLp,
+  formatPercent,
+} from "./formatAnalytics";
 
 describe("formatAnalytics", () => {
   it("formats ISK with dollar and commas", () => {
@@ -24,5 +29,11 @@ describe("formatAnalytics", () => {
 
   it("formats zero", () => {
     expect(formatCount(0)).toBe("0");
+  });
+
+  it("formats Hit % / Miss % to one decimal or em dash", () => {
+    expect(formatPercent(null)).toBe("—");
+    expect(formatPercent(0.1234)).toBe("12.3%");
+    expect(formatPercent(1)).toBe("100.0%");
   });
 });

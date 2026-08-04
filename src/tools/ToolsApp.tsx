@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { computeAmmoLoad } from "../lib/ammo";
-import { formatCount, formatIskMoney, formatLp } from "../lib/formatAnalytics";
+import {
+  formatCount,
+  formatIskMoney,
+  formatLp,
+  formatPercent,
+} from "../lib/formatAnalytics";
 import type {
   EditionFocus,
   PayoutTicket,
@@ -10,15 +15,7 @@ import type {
   SpaceBand,
 } from "../lib/analyticsTypes";
 import { joinAnalytics } from "../lib/joinedResults";
-import { hasMissileActivity } from "../lib/missileActivity";
-import {
-  deadMissiles,
-  deadVolleys,
-  formatPercent,
-  hitRate,
-  missRate,
-  sumMissileStats,
-} from "../lib/missileDerived";
+import { activeOnly, isActive, of, sum } from "../lib/missileRates";
 import { cn } from "../lib/utils";
 
 type ToolsSettings = {
@@ -344,10 +341,9 @@ export function ToolsApp() {
     focus?.scope.kind === "run" ||
     (focus?.scope.kind === "spawn" && (focus.spawn?.run_count ?? 0) > 0) ||
     (focus?.scope.kind === "overall" && (focus.catalog?.runs?.length ?? 0) > 0);
-  const visibleMissiles =
-    focus?.enrichment?.missiles?.filter(hasMissileActivity) ?? [];
+  const visibleMissiles = activeOnly(focus?.enrichment?.missiles ?? []);
   const fleetMissileSum = useMemo(
-    () => sumMissileStats(focus?.enrichment?.missiles ?? []),
+    () => sum(focus?.enrichment?.missiles ?? []),
     [focus?.enrichment?.missiles],
   );
   const joined = useMemo(
@@ -406,11 +402,10 @@ export function ToolsApp() {
       )
     : undefined;
   const siteDrillSum = useMemo(
-    () => sumMissileStats(siteDrillEnrich?.missiles ?? []),
+    () => sum(siteDrillEnrich?.missiles ?? []),
     [siteDrillEnrich?.missiles],
   );
-  const siteDrillMissiles =
-    siteDrillEnrich?.missiles?.filter(hasMissileActivity) ?? [];
+  const siteDrillMissiles = activeOnly(siteDrillEnrich?.missiles ?? []);
   /** Enrichment + focus diagnostics for the Enrich log drill-down (not Summary). */
   const topDiagnostics = useMemo(() => {
     const generic = focus?.diagnostics ?? [];
@@ -920,7 +915,7 @@ export function ToolsApp() {
                   />
                   <Row
                     label="Dead missiles"
-                    value={formatCount(fleetMissileSum.dead)}
+                    value={formatCount(fleetMissileSum.dead_missiles)}
                   />
                   <Row
                     label="Dead volleys/unused"
@@ -928,19 +923,11 @@ export function ToolsApp() {
                   />
                   <Row
                     label="Hit %"
-                    value={formatPercent(
-                      fleetMissileSum.expended === 0
-                        ? null
-                        : fleetMissileSum.hits / fleetMissileSum.expended,
-                    )}
+                    value={formatPercent(fleetMissileSum.hit_pct)}
                   />
                   <Row
                     label="Miss %"
-                    value={formatPercent(
-                      fleetMissileSum.expended === 0
-                        ? null
-                        : fleetMissileSum.dead_volleys / fleetMissileSum.expended,
-                    )}
+                    value={formatPercent(fleetMissileSum.miss_pct)}
                   />
                   <p className="text-[10px] text-muted">
                     Incomplete magazines can undercount dead missiles.
@@ -1038,17 +1025,20 @@ export function ToolsApp() {
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleMissiles.map((m) => (
+                    {visibleMissiles.map((m) => {
+                      const r = of(m);
+                      return (
                       <tr key={m.listener} className="border-t border-border">
                         <td className="px-2 py-1">{m.listener}</td>
                         <td className="px-2 py-1">{formatCount(m.reload_cycles)}</td>
                         <td className="px-2 py-1">{formatCount(m.hits)}</td>
-                        <td className="px-2 py-1">{formatCount(deadVolleys(m))}</td>
-                        <td className="px-2 py-1">{formatCount(deadMissiles(m))}</td>
-                        <td className="px-2 py-1">{formatPercent(hitRate(m))}</td>
-                        <td className="px-2 py-1">{formatPercent(missRate(m))}</td>
+                        <td className="px-2 py-1">{formatCount(r.dead_volleys)}</td>
+                        <td className="px-2 py-1">{formatCount(r.dead_missiles)}</td>
+                        <td className="px-2 py-1">{formatPercent(r.hit_pct)}</td>
+                        <td className="px-2 py-1">{formatPercent(r.miss_pct)}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1164,7 +1154,7 @@ export function ToolsApp() {
                         const canDrill =
                           focus.scope.kind === "run" &&
                           !!e &&
-                          e.missiles.some(hasMissileActivity);
+                          e.missiles.some(isActive);
                         return (
                           <tr
                             key={index}
@@ -1236,21 +1226,13 @@ export function ToolsApp() {
                           {formatCount(siteDrillSum.dead_volleys)}
                         </td>
                         <td className="px-2 py-1">
-                          {formatCount(siteDrillSum.dead)}
+                          {formatCount(siteDrillSum.dead_missiles)}
                         </td>
                         <td className="px-2 py-1">
-                          {formatPercent(
-                            siteDrillSum.expended === 0
-                              ? null
-                              : siteDrillSum.hits / siteDrillSum.expended,
-                          )}
+                          {formatPercent(siteDrillSum.hit_pct)}
                         </td>
                         <td className="px-2 py-1">
-                          {formatPercent(
-                            siteDrillSum.expended === 0
-                              ? null
-                              : siteDrillSum.dead_volleys / siteDrillSum.expended,
-                          )}
+                          {formatPercent(siteDrillSum.miss_pct)}
                         </td>
                       </tr>
                     </tbody>
@@ -1270,7 +1252,9 @@ export function ToolsApp() {
                       </tr>
                     </thead>
                     <tbody>
-                      {siteDrillMissiles.map((m) => (
+                      {siteDrillMissiles.map((m) => {
+                        const r = of(m);
+                        return (
                         <tr
                           key={m.listener}
                           className="border-t border-border"
@@ -1281,19 +1265,20 @@ export function ToolsApp() {
                           </td>
                           <td className="px-2 py-1">{formatCount(m.hits)}</td>
                           <td className="px-2 py-1">
-                            {formatCount(deadVolleys(m))}
+                            {formatCount(r.dead_volleys)}
                           </td>
                           <td className="px-2 py-1">
-                            {formatCount(deadMissiles(m))}
+                            {formatCount(r.dead_missiles)}
                           </td>
                           <td className="px-2 py-1">
-                            {formatPercent(hitRate(m))}
+                            {formatPercent(r.hit_pct)}
                           </td>
                           <td className="px-2 py-1">
-                            {formatPercent(missRate(m))}
+                            {formatPercent(r.miss_pct)}
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                     <tfoot>
                       <tr className="sticky bottom-0 border-t border-border bg-surface-raised font-medium">
@@ -1308,21 +1293,13 @@ export function ToolsApp() {
                           {formatCount(siteDrillSum.dead_volleys)}
                         </td>
                         <td className="px-2 py-1">
-                          {formatCount(siteDrillSum.dead)}
+                          {formatCount(siteDrillSum.dead_missiles)}
                         </td>
                         <td className="px-2 py-1">
-                          {formatPercent(
-                            siteDrillSum.expended === 0
-                              ? null
-                              : siteDrillSum.hits / siteDrillSum.expended,
-                          )}
+                          {formatPercent(siteDrillSum.hit_pct)}
                         </td>
                         <td className="px-2 py-1">
-                          {formatPercent(
-                            siteDrillSum.expended === 0
-                              ? null
-                              : siteDrillSum.dead_volleys / siteDrillSum.expended,
-                          )}
+                          {formatPercent(siteDrillSum.miss_pct)}
                         </td>
                       </tr>
                     </tfoot>

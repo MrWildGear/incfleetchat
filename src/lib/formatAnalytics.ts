@@ -18,3 +18,9 @@ export function formatCount(n: number): string {
 export function formatLp(n: number): string {
   return countFormatter.format(Math.round(n));
 }
+
+/** Hit % / Miss % display — one decimal, or em dash when null/non-finite. */
+export function formatPercent(rate: number | null): string {
+  if (rate == null || !Number.isFinite(rate)) return "—";
+  return `${(rate * 100).toFixed(1)}%`;
+}
