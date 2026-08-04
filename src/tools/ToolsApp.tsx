@@ -1061,11 +1061,14 @@ export function ToolsApp() {
                         <th className="px-2 py-1">Approach</th>
                         <th className="px-2 py-1">Combat→payout</th>
                         <th className="px-2 py-1">Source</th>
+                        <th className="px-2 py-1">Hit %</th>
+                        <th className="px-2 py-1">Miss %</th>
                       </tr>
                     </thead>
                     <tbody>
                       {focus.report.sites.map((s, i) => {
                         const e = enrichmentByTime.get(s.occurred_at);
+                        const siteSum = sumMissileStats(e?.missiles ?? []);
                         const canDrill =
                           focus.scope.kind === "run" &&
                           !!e &&
@@ -1107,6 +1110,20 @@ export function ToolsApp() {
                                 : "—"}
                             </td>
                             <td className="px-2 py-1">{e ? e.source : "—"}</td>
+                            <td className="px-2 py-1">
+                              {formatPercent(
+                                siteSum.expended === 0
+                                  ? null
+                                  : siteSum.dead / siteSum.expended,
+                              )}
+                            </td>
+                            <td className="px-2 py-1">
+                              {formatPercent(
+                                siteSum.expended === 0
+                                  ? null
+                                  : siteSum.hits / siteSum.expended,
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
