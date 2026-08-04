@@ -1,16 +1,14 @@
-//! RunDesk document-session: trays → analyze → focus.
+﻿//! RunDesk document-session: trays → analyze → focus.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use parking_lot::Mutex;
-use std::path::PathBuf;
 
 use crate::analytics_types::*;
 use crate::db::{Db, EnrichmentLoad};
-use crate::enrichment::enrich_run;
-use crate::gamelog_scan::{default_gamelogs_dir, scan_gamelogs, ScanResult};
+use crate::enrichment_pipeline::{self, FsGamelogScan};
 use crate::spawn_parse::{parse_manifest, SpawnDraft};
 use crate::timing::{build_report, merge_reports, AnalyticsReport, RunSettings};
-use crate::wallet_parse::{extract_wallet_fc_hint, parse_wallet_journal, WalletPayout};
+use crate::wallet_parse::{parse_wallet_journal, WalletPayout};
 
 pub struct RunDesk {
     db: Db,
@@ -145,9 +143,15 @@ impl RunDesk {
             .await
             .map_err(|e| e.to_string())?;
 
-        let enrich_result = self
-            .enrich_and_save(&run_id, &settings, &report, &wallet_text)
-            .await;
+        let enrich_result = enrichment_pipeline::enrich_and_save(
+            &self.db,
+            &FsGamelogScan,
+            &run_id,
+            &settings,
+            &report,
+            &wallet_text,
+        )
+        .await;
 
         {
             let mut st = self.inner.lock();
@@ -172,94 +176,6 @@ impl RunDesk {
         }
 
         self.snapshot().await
-    }
-
-    /// Scan gamelogs for `run_id`'s wallet window and persist an
-    /// `EnrichmentSnapshot`. A missing gamelogs directory is a warning, not
-    /// an error: an empty snapshot carrying that warning is saved so the v1
-    /// report stays intact and the reason is visible in Tools.
-    async fn enrich_and_save(
-        &self,
-        run_id: &str,
-        settings: &RunSettings,
-        report: &AnalyticsReport,
-        wallet_text: &str,
-    ) -> Result<(), String> {
-        if report.sites.is_empty() {
-            return Ok(());
-        }
-        let site_times: Vec<DateTime<Utc>> =
-            report.sites.iter().map(|s| s.occurred_at).collect();
-        let site_durations: Vec<Option<i64>> =
-            report.sites.iter().map(|s| s.duration_seconds).collect();
-
-        let app_settings = self.db.get_settings().await.map_err(|e| e.to_string())?;
-        let gamelogs_dir = app_settings
-            .gamelogs_dir
-            .as_ref()
-            .map(|d| d.trim())
-            .filter(|d| !d.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(default_gamelogs_dir);
-        let wallet_start = settings.run_start.unwrap_or(site_times[0]);
-        let wallet_end = *site_times.last().unwrap();
-
-        let launchers = app_settings.ammo_launchers.max(0) as u32;
-        let missiles_per_cycle = launchers
-            .saturating_mul(app_settings.ammo_per_launcher.max(0) as u32);
-
-        let scan = if gamelogs_dir.is_dir() {
-            scan_gamelogs(&gamelogs_dir, wallet_start, wallet_end)
-        } else {
-            ScanResult {
-                logs: Vec::new(),
-                diagnostics: vec![format!(
-                    "Gamelogs directory not found: {} — enrichment unavailable",
-                    gamelogs_dir.display()
-                )],
-            }
-        };
-
-        let wallet_fc_hint = parse_wallet_journal(wallet_text, settings.expected_isk)
-            .events
-            .first()
-            .and_then(|e| extract_wallet_fc_hint(&e.description));
-
-        let mut snapshot = enrich_run(
-            &scan.logs,
-            &site_times,
-            &site_durations,
-            settings.break_threshold_minutes,
-            settings.run_start,
-            missiles_per_cycle,
-            launchers,
-            app_settings.fc_character.as_deref(),
-            wallet_fc_hint.as_deref(),
-        );
-        snapshot
-            .diagnostics
-            .extend(scan.diagnostics.into_iter().map(|message| Diagnostic {
-                level: "warn".into(),
-                message,
-            }));
-
-        self.db
-            .save_enrichment(run_id, &snapshot)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    /// Recompute and persist enrichment for an already-sealed run.
-    async fn reenrich_run(&self, run_id: &str) -> Result<(), String> {
-        let bundle = self
-            .db
-            .load_run_for_enrich(run_id)
-            .await
-            .map_err(|e| e.to_string())?;
-        let (settings, report, wallet_text) =
-            bundle.ok_or_else(|| format!("Run {run_id} not found"))?;
-        self.enrich_and_save(run_id, &settings, &report, &wallet_text)
-            .await
     }
 
     pub async fn focus(&self, scope: ReportScope) -> Result<EditionFocus, String> {
@@ -320,7 +236,7 @@ impl RunDesk {
                 let mut ok = 0usize;
                 let mut diags = Vec::new();
                 for id in &ids {
-                    match self.reenrich_run(id).await {
+                    match enrichment_pipeline::reenrich(&self.db, &FsGamelogScan, id).await {
                         Ok(()) => ok += 1,
                         Err(e) => diags.push(Diagnostic {
                             level: "warn".into(),
@@ -502,39 +418,13 @@ impl RunDesk {
                     .list_run_ids_for_spawn(constellation)
                     .await
                     .map_err(|e| e.to_string())?;
-                self.load_and_aggregate_enrichment(&run_ids).await
+                enrichment_pipeline::load_and_aggregate(&self.db, &run_ids).await
             }
             ReportScope::Overall => {
                 let run_ids = self.db.list_all_run_ids().await.map_err(|e| e.to_string())?;
-                self.load_and_aggregate_enrichment(&run_ids).await
+                enrichment_pipeline::load_and_aggregate(&self.db, &run_ids).await
             }
         }
-    }
-
-    /// Load each run's enrichment (oldest first) and aggregate the ones that
-    /// read cleanly. Missing/stale runs are silently skipped here; they only
-    /// show up as the "N of M lack enrichment" diagnostic from
-    /// `aggregate_enrichments`.
-    async fn load_and_aggregate_enrichment(
-        &self,
-        run_ids: &[String],
-    ) -> Result<(Option<EnrichmentSnapshot>, Vec<Diagnostic>), String> {
-        if run_ids.is_empty() {
-            return Ok((None, Vec::new()));
-        }
-        let mut runs = Vec::with_capacity(run_ids.len());
-        for run_id in run_ids {
-            if let EnrichmentLoad::Ok(snapshot) = self
-                .db
-                .load_enrichment_status(run_id)
-                .await
-                .map_err(|e| e.to_string())?
-            {
-                runs.push((run_id.clone(), snapshot));
-            }
-        }
-        let aggregate = aggregate_enrichments(&runs, run_ids.len());
-        Ok((Some(aggregate), Vec::new()))
     }
 
     /// Report for the focused scope, plus diagnostics for stored runs whose
@@ -589,117 +479,6 @@ impl RunDesk {
     }
 }
 
-/// Merge per-run enrichment snapshots into one for a Spawn/Overall scope.
-///
-/// `runs` holds `(run_id, snapshot)` for every run in scope with a readable
-/// enrichment snapshot, in catalog order (oldest first, latest last) —
-/// callers must sort this way so "latest run wins" merges (missiles/cycle,
-/// `resolved_fc`) pick the right row. `scope_run_count` is the total number
-/// of runs in scope, enriched or not, used for the partial-coverage warning.
-///
-/// This is enrichment-only aggregation: it never falls back to wallet-gap
-/// timing for runs that lack enrichment, and never re-scans gamelogs.
-pub fn aggregate_enrichments(
-    runs: &[(String, EnrichmentSnapshot)],
-    scope_run_count: usize,
-) -> EnrichmentSnapshot {
-    let mut sites: Vec<EnrichmentSite> = Vec::new();
-    let mut missiles: Vec<MissileStat> = Vec::new();
-    let mut listeners: Vec<String> = Vec::new();
-    let mut diagnostics: Vec<Diagnostic> = Vec::new();
-    let mut resolved_fc: Option<String> = None;
-
-    for (_run_id, snapshot) in runs {
-        sites.extend(snapshot.sites.iter().cloned());
-
-        for m in &snapshot.missiles {
-            match missiles.iter_mut().find(|existing| existing.listener == m.listener) {
-                Some(existing) => {
-                    existing.reload_cycles += m.reload_cycles;
-                    existing.hits += m.hits;
-                    existing.dead += m.dead;
-                    // Latest contributing run wins; do not sum missiles/cycle.
-                    existing.missiles_per_cycle = m.missiles_per_cycle;
-                    existing.launchers = m.launchers;
-                }
-                None => missiles.push(m.clone()),
-            }
-        }
-
-        for listener in &snapshot.listeners {
-            if !listeners.contains(listener) {
-                listeners.push(listener.clone());
-            }
-        }
-
-        for d in &snapshot.diagnostics {
-            if !diagnostics
-                .iter()
-                .any(|existing: &Diagnostic| existing.level == d.level && existing.message == d.message)
-            {
-                diagnostics.push(d.clone());
-            }
-        }
-        resolved_fc = snapshot.resolved_fc.clone();
-    }
-
-    if runs.len() < scope_run_count {
-        diagnostics.push(Diagnostic {
-            level: "warn".into(),
-            message: format!(
-                "{} of {} runs lack enrichment",
-                scope_run_count - runs.len(),
-                scope_run_count
-            ),
-        });
-    }
-
-    // Same totals rule as `enrich_run`: warp sums non-break sites; combat
-    // total/avg only cover measurable (`Some`) sites and are `None` when
-    // there are zero of those.
-    let approach_seconds: Option<i64> = {
-        let values: Vec<i64> = sites
-            .iter()
-            .filter(|s| !s.is_break)
-            .filter_map(|s| s.approach_seconds)
-            .collect();
-        if values.is_empty() {
-            None
-        } else {
-            Some(values.iter().sum())
-        }
-    };
-    let combat_values: Vec<i64> = sites
-        .iter()
-        .filter(|s| !s.is_break)
-        .filter_map(|s| s.combat_to_payout_seconds)
-        .collect();
-    let combat_to_payout_seconds = if combat_values.is_empty() {
-        None
-    } else {
-        Some(combat_values.iter().sum())
-    };
-    let avg_combat_to_payout_seconds = if combat_values.is_empty() {
-        None
-    } else {
-        Some(combat_values.iter().sum::<i64>() as f64 / combat_values.len() as f64)
-    };
-    let fleet_dead: u32 = missiles.iter().map(|m| m.dead).sum();
-
-    EnrichmentSnapshot {
-        resolved_fc,
-        listeners,
-        diagnostics,
-        sites,
-        missiles,
-        totals: EnrichmentTotals {
-            approach_seconds,
-            combat_to_payout_seconds,
-            avg_combat_to_payout_seconds,
-            fleet_dead,
-        },
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -708,7 +487,12 @@ mod tests {
     use chrono::TimeZone;
     use tempfile::tempdir;
 
-    fn site(occurred_at: DateTime<Utc>, approach: i64, combat: Option<i64>, is_break: bool) -> EnrichmentSite {
+    fn site(
+        occurred_at: chrono::DateTime<Utc>,
+        approach: i64,
+        combat: Option<i64>,
+        is_break: bool,
+    ) -> EnrichmentSite {
         EnrichmentSite {
             occurred_at,
             approach_seconds: Some(approach),
@@ -744,153 +528,6 @@ mod tests {
                 fleet_dead: 0,
             },
         }
-    }
-
-    #[test]
-    fn aggregate_sums_same_listener_and_keeps_latest_cycle() {
-        let t0 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 0, 0).unwrap();
-        let t1 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 10, 0).unwrap();
-
-        let mut run1 = empty_snapshot(Some("FC One"));
-        run1.listeners = vec!["A".into()];
-        run1.sites = vec![site(t0, 60, Some(120), false)];
-        run1.missiles = vec![missile("A", 1, 10, 156, 5)];
-
-        let mut run2 = empty_snapshot(Some("FC Two"));
-        run2.listeners = vec!["A".into()];
-        run2.sites = vec![site(t1, 40, Some(80), false)];
-        run2.missiles = vec![missile("A", 2, 20, 200, 7)];
-
-        let runs = vec![("run-1".to_string(), run1), ("run-2".to_string(), run2)];
-        let aggregate = aggregate_enrichments(&runs, 2);
-
-        assert_eq!(aggregate.missiles.len(), 1);
-        let a = &aggregate.missiles[0];
-        assert_eq!(a.reload_cycles, 3);
-        assert_eq!(a.hits, 30);
-        assert_eq!(a.dead, 12);
-        assert_eq!(a.missiles_per_cycle, 200);
-
-        assert_eq!(aggregate.sites.len(), 2);
-        assert_eq!(aggregate.totals.approach_seconds, Some(100));
-        assert_eq!(aggregate.totals.combat_to_payout_seconds, Some(200));
-        assert_eq!(aggregate.totals.avg_combat_to_payout_seconds, Some(100.0));
-        assert_eq!(aggregate.totals.fleet_dead, 12);
-        assert_eq!(aggregate.resolved_fc.as_deref(), Some("FC Two"));
-        assert_eq!(aggregate.listeners, vec!["A".to_string()]);
-    }
-
-    #[test]
-    fn aggregate_unions_listeners_and_excludes_break_sites_from_combat() {
-        let t0 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 0, 0).unwrap();
-        let t1 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 30, 0).unwrap();
-
-        let mut run1 = empty_snapshot(Some("FC One"));
-        run1.listeners = vec!["A".into()];
-        run1.sites = vec![site(t0, 0, None, true)]; // break: excluded from combat avg
-        run1.missiles = vec![missile("A", 1, 5, 156, 2)];
-
-        let mut run2 = empty_snapshot(None);
-        run2.listeners = vec!["B".into()];
-        run2.sites = vec![site(t1, 30, Some(60), false)];
-        run2.missiles = vec![missile("B", 1, 8, 156, 3)];
-
-        let runs = vec![("run-1".to_string(), run1), ("run-2".to_string(), run2)];
-        let aggregate = aggregate_enrichments(&runs, 2);
-
-        assert_eq!(aggregate.listeners, vec!["A".to_string(), "B".to_string()]);
-        assert_eq!(aggregate.totals.approach_seconds, Some(30));
-        assert_eq!(aggregate.totals.combat_to_payout_seconds, Some(60));
-        assert_eq!(aggregate.totals.avg_combat_to_payout_seconds, Some(60.0));
-        assert_eq!(aggregate.totals.fleet_dead, 5);
-        // resolved_fc = last run's value, even when that value is None.
-        assert_eq!(aggregate.resolved_fc, None);
-    }
-
-    #[test]
-    fn aggregate_warns_when_scope_has_unenriched_runs() {
-        let t0 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 0, 0).unwrap();
-        let run1 = {
-            let mut s = empty_snapshot(Some("FC One"));
-            s.sites = vec![site(t0, 10, None, false)];
-            s
-        };
-        let runs = vec![("run-1".to_string(), run1)];
-
-        // 3 runs in scope, only 1 has readable enrichment.
-        let aggregate = aggregate_enrichments(&runs, 3);
-
-        assert!(
-            aggregate
-                .diagnostics
-                .iter()
-                .any(|d| d.level == "warn" && d.message == "2 of 3 runs lack enrichment"),
-            "diagnostics: {:?}",
-            aggregate.diagnostics
-        );
-    }
-
-    #[test]
-    fn aggregate_dedupes_repeated_diagnostics_across_runs() {
-        let dup = Diagnostic {
-            level: "warn".into(),
-            message: "skipped malformed gamelog line".into(),
-        };
-
-        let mut run1 = empty_snapshot(Some("FC One"));
-        run1.diagnostics = vec![dup.clone()];
-
-        let mut run2 = empty_snapshot(Some("FC Two"));
-        run2.diagnostics = vec![dup.clone()];
-
-        let runs = vec![("run-1".to_string(), run1), ("run-2".to_string(), run2)];
-        let aggregate = aggregate_enrichments(&runs, 2);
-
-        let matching: Vec<_> = aggregate
-            .diagnostics
-            .iter()
-            .filter(|d| d.level == dup.level && d.message == dup.message)
-            .collect();
-        assert_eq!(
-            matching.len(),
-            1,
-            "expected diagnostic to be deduped, got: {:?}",
-            aggregate.diagnostics
-        );
-    }
-
-    #[test]
-    fn aggregate_warns_when_all_runs_lack_enrichment() {
-        let aggregate = aggregate_enrichments(&[], 3);
-
-        assert!(aggregate.sites.is_empty());
-        assert!(aggregate.missiles.is_empty());
-        assert!(
-            aggregate.diagnostics.iter().any(|d| {
-                d.level == "warn" && d.message == "3 of 3 runs lack enrichment"
-            }),
-            "diagnostics: {:?}",
-            aggregate.diagnostics
-        );
-    }
-
-    #[test]
-    fn aggregate_no_warning_when_all_runs_in_scope_enriched() {
-        let t0 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 0, 0).unwrap();
-        let run1 = {
-            let mut s = empty_snapshot(Some("FC One"));
-            s.sites = vec![site(t0, 10, None, false)];
-            s
-        };
-        let runs = vec![("run-1".to_string(), run1)];
-
-        let aggregate = aggregate_enrichments(&runs, 1);
-
-        assert!(
-            !aggregate.diagnostics.iter().any(|d| d.message.contains("lack enrichment")),
-            "diagnostics: {:?}",
-            aggregate.diagnostics
-        );
     }
 
     #[tokio::test]

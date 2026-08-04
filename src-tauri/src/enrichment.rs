@@ -1,4 +1,5 @@
-//! FC resolution, approach/combat→payout timing, and dead-missile math.
+//! Enrichment math: FC resolution, approach/combat→payout, missiles, and
+//! aggregate enrichment of per-run snapshots.
 //!
 //! See docs/superpowers/specs/2026-08-03-approach-residual-timing-design.md
 //! for the authoritative rules this module implements. Approach time is a
@@ -6,6 +7,8 @@
 //! fleet has actually warped in (first `FollowingWarp` in the gap). Combat
 //! itself is timed from the first `CombatHit` at or after that warp anchor,
 //! not from any warp *end* marker — there is no more segment/warp-end math.
+//!
+//! I/O orchestration (scan, persist, re-enrich) lives in `enrichment_pipeline`.
 
 use chrono::{DateTime, Utc};
 
@@ -15,6 +18,48 @@ use crate::analytics_types::{
 };
 use crate::gamelog_parse::{GamelogEvent, GamelogEventKind};
 use crate::gamelog_scan::ListenerLog;
+
+/// Totals rule shared by `enrich_run` and `aggregate_enrichments`:
+/// approach sums non-break sites with a measurable approach; combat total/avg
+/// only cover measurable combat sites (`None` when there are zero of those);
+/// `fleet_dead` sums missile rows.
+fn enrichment_totals(sites: &[EnrichmentSite], missiles: &[MissileStat]) -> EnrichmentTotals {
+    let approach_values: Vec<i64> = sites
+        .iter()
+        .filter(|s| !s.is_break)
+        .filter_map(|s| s.approach_seconds)
+        .collect();
+    let approach_seconds = if approach_values.is_empty() {
+        None
+    } else {
+        Some(approach_values.iter().sum())
+    };
+
+    let combat_values: Vec<i64> = sites
+        .iter()
+        .filter(|s| !s.is_break)
+        .filter_map(|s| s.combat_to_payout_seconds)
+        .collect();
+    let combat_to_payout_seconds = if combat_values.is_empty() {
+        None
+    } else {
+        Some(combat_values.iter().sum())
+    };
+    let avg_combat_to_payout_seconds = if combat_values.is_empty() {
+        None
+    } else {
+        Some(combat_values.iter().sum::<i64>() as f64 / combat_values.len() as f64)
+    };
+
+    let fleet_dead: u32 = missiles.iter().map(|m| m.dead).sum();
+
+    EnrichmentTotals {
+        approach_seconds,
+        combat_to_payout_seconds,
+        avg_combat_to_payout_seconds,
+        fleet_dead,
+    }
+}
 
 /// Resolve the fleet commander's Listener name.
 ///
@@ -264,8 +309,6 @@ pub fn enrich_run(
     let resolved_fc = resolve_fc(logs, fc_character, wallet_fc_hint);
 
     let mut sites = Vec::with_capacity(site_times.len());
-    // (approach_seconds, combat_to_payout_seconds) for sites that count toward averages.
-    let mut counted: Vec<(Option<i64>, Option<i64>)> = Vec::new();
 
     for (i, &occurred_at) in site_times.iter().enumerate() {
         let gap_start = if i == 0 {
@@ -298,10 +341,6 @@ pub fn enrich_run(
             },
         };
 
-        if !is_break {
-            counted.push((approach_seconds, combat_to_payout_seconds));
-        }
-
         let site_missiles = match gap_start {
             Some(gs) if !is_break => {
                 missile_stats_in_gap(logs, missiles_per_cycle, launchers, gs, occurred_at)
@@ -320,25 +359,7 @@ pub fn enrich_run(
     }
 
     let missiles = missile_stats(logs, missiles_per_cycle, launchers);
-    let fleet_dead: u32 = missiles.iter().map(|m| m.dead).sum();
-
-    let approach_values: Vec<i64> = counted.iter().filter_map(|(a, _)| *a).collect();
-    let total_approach: Option<i64> = if approach_values.is_empty() {
-        None
-    } else {
-        Some(approach_values.iter().sum())
-    };
-    let combat_values: Vec<i64> = counted.iter().filter_map(|(_, c)| *c).collect();
-    let total_combat: Option<i64> = if combat_values.is_empty() {
-        None
-    } else {
-        Some(combat_values.iter().sum())
-    };
-    let avg_combat_to_payout_seconds = if combat_values.is_empty() {
-        None
-    } else {
-        Some(combat_values.iter().sum::<i64>() as f64 / combat_values.len() as f64)
-    };
+    let totals = enrichment_totals(&sites, &missiles);
 
     EnrichmentSnapshot {
         resolved_fc,
@@ -346,12 +367,87 @@ pub fn enrich_run(
         diagnostics,
         sites,
         missiles,
-        totals: EnrichmentTotals {
-            approach_seconds: total_approach,
-            combat_to_payout_seconds: total_combat,
-            avg_combat_to_payout_seconds,
-            fleet_dead,
-        },
+        totals,
+    }
+}
+
+/// Merge per-run enrichment snapshots into one for a Spawn/Overall scope.
+///
+/// `runs` holds `(run_id, snapshot)` for every run in scope with a readable
+/// enrichment snapshot, in catalog order (oldest first, latest last) —
+/// callers must sort this way so "latest run wins" merges (missiles/cycle,
+/// `resolved_fc`) pick the right row. `scope_run_count` is the total number
+/// of runs in scope, enriched or not, used for the partial-coverage warning.
+///
+/// This is enrichment-only aggregation: it never falls back to wallet-gap
+/// timing for runs that lack enrichment, and never re-scans gamelogs.
+pub fn aggregate_enrichments(
+    runs: &[(String, EnrichmentSnapshot)],
+    scope_run_count: usize,
+) -> EnrichmentSnapshot {
+    let mut sites: Vec<EnrichmentSite> = Vec::new();
+    let mut missiles: Vec<MissileStat> = Vec::new();
+    let mut listeners: Vec<String> = Vec::new();
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    let mut resolved_fc: Option<String> = None;
+
+    for (_run_id, snapshot) in runs {
+        sites.extend(snapshot.sites.iter().cloned());
+
+        for m in &snapshot.missiles {
+            match missiles
+                .iter_mut()
+                .find(|existing| existing.listener == m.listener)
+            {
+                Some(existing) => {
+                    existing.reload_cycles += m.reload_cycles;
+                    existing.hits += m.hits;
+                    existing.dead += m.dead;
+                    // Latest contributing run wins; do not sum missiles/cycle.
+                    existing.missiles_per_cycle = m.missiles_per_cycle;
+                    existing.launchers = m.launchers;
+                }
+                None => missiles.push(m.clone()),
+            }
+        }
+
+        for listener in &snapshot.listeners {
+            if !listeners.contains(listener) {
+                listeners.push(listener.clone());
+            }
+        }
+
+        for d in &snapshot.diagnostics {
+            if !diagnostics
+                .iter()
+                .any(|existing: &Diagnostic| existing.level == d.level && existing.message == d.message)
+            {
+                diagnostics.push(d.clone());
+            }
+        }
+        resolved_fc = snapshot.resolved_fc.clone();
+    }
+
+    if runs.len() < scope_run_count {
+        diagnostics.push(Diagnostic {
+            level: "warn".into(),
+            message: format!(
+                "{} of {} runs lack enrichment",
+                scope_run_count - runs.len(),
+                scope_run_count
+            ),
+        });
+    }
+
+    let totals = enrichment_totals(&sites, &missiles);
+
+    EnrichmentSnapshot {
+        resolved_fc,
+        listeners,
+        diagnostics,
+        sites,
+        missiles,
+        totals,
     }
 }
 
@@ -969,5 +1065,194 @@ mod tests {
             None,
         );
         assert!(snap.sites[0].missiles.is_empty());
+    }
+
+    fn agg_site(
+        occurred_at: DateTime<Utc>,
+        approach: i64,
+        combat: Option<i64>,
+        is_break: bool,
+    ) -> EnrichmentSite {
+        EnrichmentSite {
+            occurred_at,
+            approach_seconds: Some(approach),
+            combat_to_payout_seconds: combat,
+            is_break,
+            source: EnrichmentSource::Fc,
+            missiles: vec![],
+        }
+    }
+
+    fn agg_missile(listener: &str, cycles: u32, hits: u32, per_cycle: u32, dead: u32) -> MissileStat {
+        MissileStat {
+            listener: listener.into(),
+            reload_cycles: cycles,
+            hits,
+            missiles_per_cycle: per_cycle,
+            launchers: 6,
+            dead,
+        }
+    }
+
+    fn empty_snapshot(resolved_fc: Option<&str>) -> EnrichmentSnapshot {
+        EnrichmentSnapshot {
+            resolved_fc: resolved_fc.map(|s| s.to_string()),
+            listeners: Vec::new(),
+            diagnostics: Vec::new(),
+            sites: Vec::new(),
+            missiles: Vec::new(),
+            totals: EnrichmentTotals {
+                approach_seconds: None,
+                combat_to_payout_seconds: None,
+                avg_combat_to_payout_seconds: None,
+                fleet_dead: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn aggregate_sums_same_listener_and_keeps_latest_cycle() {
+        let t0 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 0, 0).unwrap();
+        let t1 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 10, 0).unwrap();
+
+        let mut run1 = empty_snapshot(Some("FC One"));
+        run1.listeners = vec!["A".into()];
+        run1.sites = vec![agg_site(t0, 60, Some(120), false)];
+        run1.missiles = vec![agg_missile("A", 1, 10, 156, 5)];
+
+        let mut run2 = empty_snapshot(Some("FC Two"));
+        run2.listeners = vec!["A".into()];
+        run2.sites = vec![agg_site(t1, 40, Some(80), false)];
+        run2.missiles = vec![agg_missile("A", 2, 20, 200, 7)];
+
+        let runs = vec![("run-1".to_string(), run1), ("run-2".to_string(), run2)];
+        let aggregate = aggregate_enrichments(&runs, 2);
+
+        assert_eq!(aggregate.missiles.len(), 1);
+        let a = &aggregate.missiles[0];
+        assert_eq!(a.reload_cycles, 3);
+        assert_eq!(a.hits, 30);
+        assert_eq!(a.dead, 12);
+        assert_eq!(a.missiles_per_cycle, 200);
+
+        assert_eq!(aggregate.sites.len(), 2);
+        assert_eq!(aggregate.totals.approach_seconds, Some(100));
+        assert_eq!(aggregate.totals.combat_to_payout_seconds, Some(200));
+        assert_eq!(aggregate.totals.avg_combat_to_payout_seconds, Some(100.0));
+        assert_eq!(aggregate.totals.fleet_dead, 12);
+        assert_eq!(aggregate.resolved_fc.as_deref(), Some("FC Two"));
+        assert_eq!(aggregate.listeners, vec!["A".to_string()]);
+    }
+
+    #[test]
+    fn aggregate_unions_listeners_and_excludes_break_sites_from_combat() {
+        let t0 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 0, 0).unwrap();
+        let t1 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 30, 0).unwrap();
+
+        let mut run1 = empty_snapshot(Some("FC One"));
+        run1.listeners = vec!["A".into()];
+        run1.sites = vec![agg_site(t0, 0, None, true)];
+        run1.missiles = vec![agg_missile("A", 1, 5, 156, 2)];
+
+        let mut run2 = empty_snapshot(None);
+        run2.listeners = vec!["B".into()];
+        run2.sites = vec![agg_site(t1, 30, Some(60), false)];
+        run2.missiles = vec![agg_missile("B", 1, 8, 156, 3)];
+
+        let runs = vec![("run-1".to_string(), run1), ("run-2".to_string(), run2)];
+        let aggregate = aggregate_enrichments(&runs, 2);
+
+        assert_eq!(aggregate.listeners, vec!["A".to_string(), "B".to_string()]);
+        assert_eq!(aggregate.totals.approach_seconds, Some(30));
+        assert_eq!(aggregate.totals.combat_to_payout_seconds, Some(60));
+        assert_eq!(aggregate.totals.avg_combat_to_payout_seconds, Some(60.0));
+        assert_eq!(aggregate.totals.fleet_dead, 5);
+        assert_eq!(aggregate.resolved_fc, None);
+    }
+
+    #[test]
+    fn aggregate_warns_when_scope_has_unenriched_runs() {
+        let t0 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 0, 0).unwrap();
+        let run1 = {
+            let mut s = empty_snapshot(Some("FC One"));
+            s.sites = vec![agg_site(t0, 10, None, false)];
+            s
+        };
+        let runs = vec![("run-1".to_string(), run1)];
+        let aggregate = aggregate_enrichments(&runs, 3);
+
+        assert!(
+            aggregate
+                .diagnostics
+                .iter()
+                .any(|d| d.level == "warn" && d.message == "2 of 3 runs lack enrichment"),
+            "diagnostics: {:?}",
+            aggregate.diagnostics
+        );
+    }
+
+    #[test]
+    fn aggregate_dedupes_repeated_diagnostics_across_runs() {
+        let dup = Diagnostic {
+            level: "warn".into(),
+            message: "skipped malformed gamelog line".into(),
+        };
+
+        let mut run1 = empty_snapshot(Some("FC One"));
+        run1.diagnostics = vec![dup.clone()];
+
+        let mut run2 = empty_snapshot(Some("FC Two"));
+        run2.diagnostics = vec![dup.clone()];
+
+        let runs = vec![("run-1".to_string(), run1), ("run-2".to_string(), run2)];
+        let aggregate = aggregate_enrichments(&runs, 2);
+
+        let matching: Vec<_> = aggregate
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == dup.level && d.message == dup.message)
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "expected diagnostic to be deduped, got: {:?}",
+            aggregate.diagnostics
+        );
+    }
+
+    #[test]
+    fn aggregate_warns_when_all_runs_lack_enrichment() {
+        let aggregate = aggregate_enrichments(&[], 3);
+
+        assert!(aggregate.sites.is_empty());
+        assert!(aggregate.missiles.is_empty());
+        assert!(
+            aggregate.diagnostics.iter().any(|d| {
+                d.level == "warn" && d.message == "3 of 3 runs lack enrichment"
+            }),
+            "diagnostics: {:?}",
+            aggregate.diagnostics
+        );
+    }
+
+    #[test]
+    fn aggregate_no_warning_when_all_runs_in_scope_enriched() {
+        let t0 = Utc.with_ymd_and_hms(2026, 7, 29, 23, 0, 0).unwrap();
+        let run1 = {
+            let mut s = empty_snapshot(Some("FC One"));
+            s.sites = vec![agg_site(t0, 10, None, false)];
+            s
+        };
+        let runs = vec![("run-1".to_string(), run1)];
+        let aggregate = aggregate_enrichments(&runs, 1);
+
+        assert!(
+            !aggregate
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("lack enrichment")),
+            "diagnostics: {:?}",
+            aggregate.diagnostics
+        );
     }
 }

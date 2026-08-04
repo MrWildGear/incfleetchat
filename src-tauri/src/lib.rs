@@ -4,6 +4,7 @@ mod commands;
 mod db;
 mod encoding;
 mod enrichment;
+mod enrichment_pipeline;
 mod gamelog_parse;
 mod gamelog_scan;
 mod parse;

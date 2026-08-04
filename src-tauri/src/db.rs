@@ -405,7 +405,7 @@ impl Db {
     }
 
     /// Run ids for a spawn, oldest first (latest last) — the order
-    /// `aggregate_enrichments` expects so "latest wins" merges behave.
+    /// `enrichment::aggregate_enrichments` expects so "latest wins" merges behave.
     pub async fn list_run_ids_for_spawn(
         &self,
         constellation: &str,
