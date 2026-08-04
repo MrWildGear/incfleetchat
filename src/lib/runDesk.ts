@@ -1,5 +1,4 @@
 import type {
-  AmendOp,
   EditionFocus,
   EnrichPrelude,
   PayoutTicket,
@@ -14,17 +13,25 @@ export type DeskInvoke = <T>(
   args?: Record<string, unknown>,
 ) => Promise<T>;
 
-export type RunDesk = {
+/** One-shot RunDesk commands — thin EditionFocus invokes. */
+export type RunDeskCmds = {
   open(): Promise<EditionFocus>;
   paste(tray: "manifest" | "wallet", text: string): Promise<EditionFocus>;
   pasteManifest(text: string): Promise<EditionFocus>;
-  importWallet(text: string, replace: boolean): Promise<EditionFocus>;
-  analyze(settings: RunSettings, prelude: EnrichPrelude): Promise<EditionFocus>;
   focus(scope: ReportScope): Promise<EditionFocus>;
-  amend(op: AmendOp): Promise<EditionFocus>;
   setSessionSettings(settings: RunSettings): Promise<EditionFocus>;
   setConstellation(constellation: string): Promise<EditionFocus>;
   clearWalletTray(): Promise<EditionFocus>;
+  deleteRun(runId: string): Promise<EditionFocus>;
+  deleteSpawn(constellation: string): Promise<EditionFocus>;
+  clearAll(): Promise<EditionFocus>;
+  patchAppSettings(patch: Record<string, unknown>): Promise<void>;
+};
+
+/** Multi-step orchestration that composes cmds / side effects. */
+export type RunDeskOps = {
+  importWallet(text: string, replace: boolean): Promise<EditionFocus>;
+  analyze(settings: RunSettings, prelude: EnrichPrelude): Promise<EditionFocus>;
   setSpaceAndFleet(
     current: RunSettings,
     space: SpaceBand,
@@ -34,10 +41,10 @@ export type RunDesk = {
     runId: string | undefined,
     prelude: EnrichPrelude,
   ): Promise<EditionFocus>;
-  deleteRun(runId: string): Promise<EditionFocus>;
-  deleteSpawn(constellation: string): Promise<EditionFocus>;
-  clearAll(): Promise<EditionFocus>;
-  patchAppSettings(patch: Record<string, unknown>): Promise<void>;
+};
+
+export type RunDeskClient = RunDeskOps & {
+  cmds: RunDeskCmds;
 };
 
 async function persistPrelude(
@@ -58,8 +65,8 @@ async function persistPrelude(
   });
 }
 
-export function createRunDesk(invoke: DeskInvoke): RunDesk {
-  return {
+export function createRunDeskClient(invoke: DeskInvoke): RunDeskClient {
+  const cmds: RunDeskCmds = {
     open: () => invoke<EditionFocus>("run_desk_open"),
 
     paste: (tray, text) =>
@@ -68,26 +75,7 @@ export function createRunDesk(invoke: DeskInvoke): RunDesk {
     pasteManifest: (text) =>
       invoke<EditionFocus>("run_desk_paste", { tray: "manifest", text }),
 
-    async importWallet(text, replace) {
-      if (replace) {
-        await invoke<EditionFocus>("run_desk_amend", {
-          op: { op: "clear_wallet_tray" },
-        });
-      }
-      return invoke<EditionFocus>("run_desk_paste", { tray: "wallet", text });
-    },
-
-    async analyze(settings, prelude) {
-      await persistPrelude(invoke, prelude);
-      await invoke<EditionFocus>("run_desk_amend", {
-        op: { op: "set_session_settings", settings },
-      });
-      return invoke<EditionFocus>("run_desk_analyze");
-    },
-
     focus: (scope) => invoke<EditionFocus>("run_desk_focus", { scope }),
-
-    amend: (op) => invoke<EditionFocus>("run_desk_amend", { op }),
 
     setSessionSettings: (settings) =>
       invoke<EditionFocus>("run_desk_amend", {
@@ -104,30 +92,6 @@ export function createRunDesk(invoke: DeskInvoke): RunDesk {
         op: { op: "clear_wallet_tray" },
       }),
 
-    async setSpaceAndFleet(current, space, fleetSize) {
-      const ticket = await invoke<PayoutTicket>("lookup_vanguard_payout", {
-        space,
-        fleetSize,
-      });
-      return invoke<EditionFocus>("run_desk_amend", {
-        op: {
-          op: "set_session_settings",
-          settings: {
-            ...current,
-            space,
-            fleet_size: fleetSize,
-            expected_isk: ticket.isk,
-            lp_per_char: ticket.lp_per_char,
-          },
-        },
-      });
-    },
-
-    async reenrich(runId, prelude) {
-      await persistPrelude(invoke, prelude);
-      return invoke<EditionFocus>("run_desk_reenrich", { runId });
-    },
-
     deleteRun: (runId) =>
       invoke<EditionFocus>("run_desk_delete_run", { runId }),
 
@@ -138,6 +102,42 @@ export function createRunDesk(invoke: DeskInvoke): RunDesk {
 
     async patchAppSettings(patch) {
       await invoke("set_settings", { patch });
+    },
+  };
+
+  return {
+    cmds,
+
+    async importWallet(text, replace) {
+      if (replace) {
+        await cmds.clearWalletTray();
+      }
+      return cmds.paste("wallet", text);
+    },
+
+    async analyze(settings, prelude) {
+      await persistPrelude(invoke, prelude);
+      await cmds.setSessionSettings(settings);
+      return invoke<EditionFocus>("run_desk_analyze");
+    },
+
+    async setSpaceAndFleet(current, space, fleetSize) {
+      const ticket = await invoke<PayoutTicket>("lookup_vanguard_payout", {
+        space,
+        fleetSize,
+      });
+      return cmds.setSessionSettings({
+        ...current,
+        space,
+        fleet_size: fleetSize,
+        expected_isk: ticket.isk,
+        lp_per_char: ticket.lp_per_char,
+      });
+    },
+
+    async reenrich(runId, prelude) {
+      await persistPrelude(invoke, prelude);
+      return invoke<EditionFocus>("run_desk_reenrich", { runId });
     },
   };
 }

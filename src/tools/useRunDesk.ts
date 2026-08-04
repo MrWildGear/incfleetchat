@@ -7,7 +7,7 @@ import type {
   RunSettings,
   SpaceBand,
 } from "../lib/runDeskTypes";
-import { createRunDesk, type RunDesk } from "../lib/runDesk";
+import { createRunDeskClient } from "../lib/runDesk";
 
 const defaultSettings: RunSettings = {
   space: "low_null",
@@ -26,7 +26,6 @@ export type UseRunDeskResult = {
   enriching: boolean;
   scopeBusy: boolean;
   deleting: boolean;
-  desk: RunDesk;
   applyFocus: (f: EditionFocus) => void;
   open: () => Promise<void>;
   analyze: (prelude: EnrichPrelude) => Promise<void>;
@@ -46,9 +45,9 @@ export type UseRunDeskResult = {
 };
 
 export function useRunDesk(): UseRunDeskResult {
-  const runDesk = useMemo(
+  const client = useMemo(
     () =>
-      createRunDesk((cmd, args) =>
+      createRunDeskClient((cmd, args) =>
         args === undefined ? invoke(cmd) : invoke(cmd, args),
       ),
     [],
@@ -69,24 +68,24 @@ export function useRunDesk(): UseRunDeskResult {
 
   const open = useCallback(async () => {
     try {
-      applyFocus(await runDesk.open());
+      applyFocus(await client.cmds.open());
     } catch (e) {
       setError(String(e));
     }
-  }, [applyFocus, runDesk]);
+  }, [applyFocus, client]);
 
   const analyze = useCallback(
     async (prelude: EnrichPrelude) => {
       try {
         setEnriching(true);
-        applyFocus(await runDesk.analyze(settings, prelude));
+        applyFocus(await client.analyze(settings, prelude));
       } catch (e) {
         setError(String(e));
       } finally {
         setEnriching(false);
       }
     },
-    [applyFocus, runDesk, settings],
+    [applyFocus, client, settings],
   );
 
   const reenrich = useCallback(
@@ -95,31 +94,31 @@ export function useRunDesk(): UseRunDeskResult {
         setEnriching(true);
         const runId =
           focus?.scope.kind === "run" ? focus.scope.run_id : undefined;
-        applyFocus(await runDesk.reenrich(runId, prelude));
+        applyFocus(await client.reenrich(runId, prelude));
       } catch (e) {
         setError(String(e));
       } finally {
         setEnriching(false);
       }
     },
-    [applyFocus, focus?.scope, runDesk],
+    [applyFocus, client, focus?.scope],
   );
 
   const pasteManifest = useCallback(
     async (text: string) => {
       try {
-        applyFocus(await runDesk.pasteManifest(text));
+        applyFocus(await client.cmds.pasteManifest(text));
       } catch (e) {
         setError(String(e));
       }
     },
-    [applyFocus, runDesk],
+    [applyFocus, client],
   );
 
   const importWallet = useCallback(
     async (text: string, replace: boolean) => {
       try {
-        const f = await runDesk.importWallet(text, replace);
+        const f = await client.importWallet(text, replace);
         applyFocus(f);
         return f;
       } catch (e) {
@@ -127,115 +126,115 @@ export function useRunDesk(): UseRunDeskResult {
         return null;
       }
     },
-    [applyFocus, runDesk],
+    [applyFocus, client],
   );
 
   const setScope = useCallback(
     async (scope: ReportScope) => {
       try {
         setScopeBusy(true);
-        applyFocus(await runDesk.focus(scope));
+        applyFocus(await client.cmds.focus(scope));
       } catch (e) {
         setError(String(e));
       } finally {
         setScopeBusy(false);
       }
     },
-    [applyFocus, runDesk],
+    [applyFocus, client],
   );
 
   const setSessionSettings = useCallback(
     async (next: RunSettings) => {
       setSettings(next);
       try {
-        applyFocus(await runDesk.setSessionSettings(next));
+        applyFocus(await client.cmds.setSessionSettings(next));
       } catch (e) {
         setError(String(e));
       }
     },
-    [applyFocus, runDesk],
+    [applyFocus, client],
   );
 
   const setSpaceAndFleet = useCallback(
     async (space: SpaceBand, fleetSize: number) => {
       try {
-        applyFocus(await runDesk.setSpaceAndFleet(settings, space, fleetSize));
+        applyFocus(await client.setSpaceAndFleet(settings, space, fleetSize));
       } catch (e) {
         setError(String(e));
       }
     },
-    [applyFocus, runDesk, settings],
+    [applyFocus, client, settings],
   );
 
   const setConstellation = useCallback(
     async (constellation: string) => {
       try {
-        applyFocus(await runDesk.setConstellation(constellation));
+        applyFocus(await client.cmds.setConstellation(constellation));
       } catch (e) {
         setError(String(e));
       }
     },
-    [applyFocus, runDesk],
+    [applyFocus, client],
   );
 
   const clearWalletTray = useCallback(async () => {
     try {
-      applyFocus(await runDesk.clearWalletTray());
+      applyFocus(await client.cmds.clearWalletTray());
     } catch (e) {
       setError(String(e));
       throw e;
     }
-  }, [applyFocus, runDesk]);
+  }, [applyFocus, client]);
 
   const deleteRun = useCallback(
     async (runId: string) => {
       try {
         setDeleting(true);
-        applyFocus(await runDesk.deleteRun(runId));
+        applyFocus(await client.cmds.deleteRun(runId));
       } catch (e) {
         setError(String(e));
       } finally {
         setDeleting(false);
       }
     },
-    [applyFocus, runDesk],
+    [applyFocus, client],
   );
 
   const deleteSpawn = useCallback(
     async (constellation: string) => {
       try {
         setDeleting(true);
-        applyFocus(await runDesk.deleteSpawn(constellation));
+        applyFocus(await client.cmds.deleteSpawn(constellation));
       } catch (e) {
         setError(String(e));
       } finally {
         setDeleting(false);
       }
     },
-    [applyFocus, runDesk],
+    [applyFocus, client],
   );
 
   const clearAll = useCallback(async () => {
     try {
       setDeleting(true);
-      applyFocus(await runDesk.clearAll());
+      applyFocus(await client.cmds.clearAll());
     } catch (e) {
       setError(String(e));
     } finally {
       setDeleting(false);
     }
-  }, [applyFocus, runDesk]);
+  }, [applyFocus, client]);
 
   const patchAppSettings = useCallback(
     async (patch: Record<string, unknown>) => {
       try {
-        await runDesk.patchAppSettings(patch);
+        await client.cmds.patchAppSettings(patch);
       } catch (e) {
         setError(String(e));
         throw e;
       }
     },
-    [runDesk],
+    [client],
   );
 
   return {
@@ -245,7 +244,6 @@ export function useRunDesk(): UseRunDeskResult {
     enriching,
     scopeBusy,
     deleting,
-    desk: runDesk,
     applyFocus,
     open,
     analyze,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRunDesk, type DeskInvoke } from "./runDesk";
+import { createRunDeskClient, type DeskInvoke } from "./runDesk";
 import type { EditionFocus, RunSettings } from "./runDeskTypes";
 
 const defaultSettings: RunSettings = {
@@ -46,19 +46,19 @@ const prelude = {
   ammoPerLauncher: 26,
 };
 
-describe("createRunDesk.open", () => {
+describe("createRunDeskClient.cmds.open", () => {
   it("returns EditionFocus from run_desk_open", async () => {
     const snap = focus({ sealed_run_id: "r1" });
     const { invoke, calls } = recordingInvoke({
       run_desk_open: () => snap,
     });
-    const desk = createRunDesk(invoke);
-    await expect(desk.open()).resolves.toEqual(snap);
+    const client = createRunDeskClient(invoke);
+    await expect(client.cmds.open()).resolves.toEqual(snap);
     expect(calls).toEqual([{ cmd: "run_desk_open", args: undefined }]);
   });
 });
 
-describe("createRunDesk.analyze", () => {
+describe("createRunDeskClient.analyze", () => {
   it("persists gamelogs/FC and ammo, amends session settings, then analyzes", async () => {
     const after = focus({ sealed_run_id: "analyzed" });
     const { invoke, calls } = recordingInvoke({
@@ -66,8 +66,8 @@ describe("createRunDesk.analyze", () => {
       run_desk_amend: () => focus(),
       run_desk_analyze: () => after,
     });
-    const desk = createRunDesk(invoke);
-    await expect(desk.analyze(defaultSettings, prelude)).resolves.toEqual(
+    const client = createRunDeskClient(invoke);
+    await expect(client.analyze(defaultSettings, prelude)).resolves.toEqual(
       after,
     );
     expect(calls.map((c) => c.cmd)).toEqual([
@@ -88,15 +88,15 @@ describe("createRunDesk.analyze", () => {
   });
 });
 
-describe("createRunDesk.reenrich", () => {
+describe("createRunDeskClient.reenrich", () => {
   it("persists prelude then reenriches with runId", async () => {
     const after = focus({ sealed_run_id: "r9" });
     const { invoke, calls } = recordingInvoke({
       set_settings: () => undefined,
       run_desk_reenrich: () => after,
     });
-    const desk = createRunDesk(invoke);
-    await expect(desk.reenrich("r9", prelude)).resolves.toEqual(after);
+    const client = createRunDeskClient(invoke);
+    await expect(client.reenrich("r9", prelude)).resolves.toEqual(after);
     expect(calls.map((c) => c.cmd)).toEqual([
       "set_settings",
       "set_settings",
@@ -106,15 +106,15 @@ describe("createRunDesk.reenrich", () => {
   });
 });
 
-describe("createRunDesk.importWallet", () => {
+describe("createRunDeskClient.importWallet", () => {
   it("clears tray before paste when replace is true", async () => {
     const after = focus();
     const { invoke, calls } = recordingInvoke({
       run_desk_amend: () => focus(),
       run_desk_paste: () => after,
     });
-    const desk = createRunDesk(invoke);
-    await expect(desk.importWallet("WALLET", true)).resolves.toEqual(after);
+    const client = createRunDeskClient(invoke);
+    await expect(client.importWallet("WALLET", true)).resolves.toEqual(after);
     expect(calls).toEqual([
       { cmd: "run_desk_amend", args: { op: { op: "clear_wallet_tray" } } },
       {
@@ -129,8 +129,8 @@ describe("createRunDesk.importWallet", () => {
     const { invoke, calls } = recordingInvoke({
       run_desk_paste: () => after,
     });
-    const desk = createRunDesk(invoke);
-    await expect(desk.importWallet("MORE", false)).resolves.toEqual(after);
+    const client = createRunDeskClient(invoke);
+    await expect(client.importWallet("MORE", false)).resolves.toEqual(after);
     expect(calls).toEqual([
       {
         cmd: "run_desk_paste",
@@ -140,16 +140,16 @@ describe("createRunDesk.importWallet", () => {
   });
 });
 
-describe("createRunDesk.setSpaceAndFleet", () => {
+describe("createRunDeskClient.setSpaceAndFleet", () => {
   it("looks up payout then amends space, fleet, isk, and lp", async () => {
     const after = focus();
     const { invoke, calls } = recordingInvoke({
       lookup_vanguard_payout: () => ({ isk: 10_395_000, lp_per_char: 1_400 }),
       run_desk_amend: () => after,
     });
-    const desk = createRunDesk(invoke);
+    const client = createRunDeskClient(invoke);
     await expect(
-      desk.setSpaceAndFleet(defaultSettings, "highsec", 10),
+      client.setSpaceAndFleet(defaultSettings, "highsec", 10),
     ).resolves.toEqual(after);
     expect(calls[0]).toEqual({
       cmd: "lookup_vanguard_payout",

@@ -570,7 +570,7 @@ export function ToolsApp() {
                         setWalletPaste("");
                       })
                       .catch(() => {
-                        /* error already on desk.error */
+                        /* error already on useRunDesk.error */
                       });
                   }}
                   className="rounded border border-border px-2 py-1 text-xs hover:border-overdue/40"
