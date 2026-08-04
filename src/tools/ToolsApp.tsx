@@ -4,13 +4,12 @@ import { computeAmmoLoad } from "../lib/ammo";
 import { formatCount, formatIskMoney, formatLp } from "../lib/formatAnalytics";
 import type {
   EditionFocus,
-  EnrichmentSite,
   PayoutTicket,
   ReportScope,
   RunSettings,
   SpaceBand,
 } from "../lib/analyticsTypes";
-import { avgCombatToPayoutForHour, missileRatesForHour } from "../lib/hourlyAvgCombat";
+import { joinAnalytics } from "../lib/joinedResults";
 import { hasMissileActivity } from "../lib/missileActivity";
 import {
   deadMissiles,
@@ -351,51 +350,43 @@ export function ToolsApp() {
     () => sumMissileStats(focus?.enrichment?.missiles ?? []),
     [focus?.enrichment?.missiles],
   );
-  const enrichmentByTime = useMemo(() => {
-    const map = new Map<string, EnrichmentSite>();
-    for (const s of focus?.enrichment?.sites ?? []) map.set(s.occurred_at, s);
-    return map;
-  }, [focus?.enrichment]);
+  const joined = useMemo(
+    () => joinAnalytics(focus?.report ?? null, focus?.enrichment ?? null),
+    [focus?.report, focus?.enrichment],
+  );
   const sortedSiteRows = useMemo(() => {
-    const sites = focus?.report?.sites ?? [];
-    const rows = sites.map((s, index) => {
-      const e = enrichmentByTime.get(s.occurred_at);
-      const siteSum = sumMissileStats(e?.missiles ?? []);
-      const hitPct =
-        siteSum.expended === 0 ? null : siteSum.hits / siteSum.expended;
-      const missPct =
-        siteSum.expended === 0 ? null : siteSum.dead_volleys / siteSum.expended;
-      return { s, e, siteSum, hitPct, missPct, index };
-    });
+    const rows = joined.sites.map((row, index) => ({ ...row, index }));
     const { key, dir } = siteSort;
     const sign = dir === "asc" ? 1 : -1;
     return [...rows].sort((a, b) => {
       let cmp = 0;
       switch (key) {
         case "time":
-          cmp = (Date.parse(a.s.occurred_at) - Date.parse(b.s.occurred_at)) * sign;
+          cmp =
+            (Date.parse(a.site.occurred_at) - Date.parse(b.site.occurred_at)) *
+            sign;
           break;
         case "duration":
           cmp = compareNullableNumber(
-            a.s.duration_seconds ?? null,
-            b.s.duration_seconds ?? null,
+            a.site.duration_seconds ?? null,
+            b.site.duration_seconds ?? null,
             sign,
           );
           break;
         case "break":
-          cmp = (Number(a.s.is_break) - Number(b.s.is_break)) * sign;
+          cmp = (Number(a.site.is_break) - Number(b.site.is_break)) * sign;
           break;
         case "approach":
           cmp = compareNullableNumber(
-            a.e?.approach_seconds ?? null,
-            b.e?.approach_seconds ?? null,
+            a.enrichment?.approach_seconds ?? null,
+            b.enrichment?.approach_seconds ?? null,
             sign,
           );
           break;
         case "combat":
           cmp = compareNullableNumber(
-            a.e?.combat_to_payout_seconds ?? null,
-            b.e?.combat_to_payout_seconds ?? null,
+            a.enrichment?.combat_to_payout_seconds ?? null,
+            b.enrichment?.combat_to_payout_seconds ?? null,
             sign,
           );
           break;
@@ -408,7 +399,7 @@ export function ToolsApp() {
       }
       return cmp === 0 ? a.index - b.index : cmp;
     });
-  }, [focus?.report?.sites, enrichmentByTime, siteSort]);
+  }, [joined.sites, siteSort]);
   const siteDrillEnrich = siteDrill
     ? focus?.enrichment?.sites.find(
         (x) => x.occurred_at === siteDrill.occurredAt,
@@ -812,12 +803,8 @@ export function ToolsApp() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(focus?.report?.hourly ?? []).map((h) => {
-                    const rates = missileRatesForHour(
-                      h.hour_start,
-                      focus?.enrichment?.sites ?? [],
-                    );
-                    return (
+                  {joined.hours.map(
+                    ({ bucket: h, avgCombatToPayout, hitPct, missPct }) => (
                     <tr key={h.hour_start} className="border-t border-border">
                       <td className="px-2 py-1">
                         {new Date(h.hour_start).toLocaleString()}
@@ -829,23 +816,18 @@ export function ToolsApp() {
                         {formatDuration(h.avg_site_seconds)}
                       </td>
                       <td className="px-2 py-1">
-                        {formatDuration(
-                          avgCombatToPayoutForHour(
-                            h.hour_start,
-                            focus?.enrichment?.sites ?? [],
-                          ),
-                        )}
+                        {formatDuration(avgCombatToPayout)}
                       </td>
                       <td className="px-2 py-1">
-                        {formatPercent(rates.hitPct)}
+                        {formatPercent(hitPct)}
                       </td>
                       <td className="px-2 py-1">
-                        {formatPercent(rates.missPct)}
+                        {formatPercent(missPct)}
                       </td>
                     </tr>
-                    );
-                  })}
-                  {!focus?.report?.hourly?.length && (
+                    ),
+                  )}
+                  {!joined.hours.length && (
                     <tr>
                       <td colSpan={8} className="px-2 py-6 text-center text-muted">
                         No report yet — paste Manifest + wallet and Analyze
@@ -875,9 +857,7 @@ export function ToolsApp() {
                   />
                   <Row
                     label="Avg combat→payout"
-                    value={formatDuration(
-                      focus?.enrichment?.totals.avg_combat_to_payout_seconds,
-                    )}
+                    value={formatDuration(joined.avgCombatToPayout)}
                   />
                   <Row
                     label="Liquid ISK/hr"
@@ -1179,7 +1159,8 @@ export function ToolsApp() {
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedSiteRows.map(({ s, e, hitPct, missPct, index }) => {
+                      {sortedSiteRows.map(
+                        ({ site: s, enrichment: e, hitPct, missPct, index }) => {
                         const canDrill =
                           focus.scope.kind === "run" &&
                           !!e &&
@@ -1224,7 +1205,8 @@ export function ToolsApp() {
                             </td>
                           </tr>
                         );
-                      })}
+                      },
+                      )}
                     </tbody>
                   </table>
                 ) : null}
