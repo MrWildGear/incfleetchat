@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { computeAmmoLoad } from "../lib/ammo";
 import {
@@ -7,16 +7,11 @@ import {
   formatLp,
   formatPercent,
 } from "../lib/formatAnalytics";
-import type {
-  EditionFocus,
-  PayoutTicket,
-  ReportScope,
-  RunSettings,
-  SpaceBand,
-} from "../lib/analyticsTypes";
+import type { SpaceBand } from "../lib/analyticsTypes";
 import { joinAnalytics } from "../lib/joinedResults";
 import { activeOnly, isActive, of, sum } from "../lib/missileRates";
 import { cn } from "../lib/utils";
+import { useRunDesk } from "./useRunDesk";
 
 type ToolsSettings = {
   gamelogs_dir: string | null;
@@ -68,8 +63,6 @@ const defaultAmmo = {
 
 export function ToolsApp() {
   const [tab, setTab] = useState<Tab>("analytics");
-  const [focus, setFocus] = useState<EditionFocus | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [manifestPaste, setManifestPaste] = useState("");
   const [walletPaste, setWalletPaste] = useState("");
   const [walletBuffer, setWalletBuffer] = useState("");
@@ -83,20 +76,30 @@ export function ToolsApp() {
   const [showEnrichLog, setShowEnrichLog] = useState(false);
   const [gamelogsPath, setGamelogsPath] = useState("");
   const [fcCharacter, setFcCharacter] = useState("");
-  const [enriching, setEnriching] = useState(false);
-  const [scopeBusy, setScopeBusy] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const walletRef = useRef<HTMLTextAreaElement>(null);
 
-  const [settings, setSettings] = useState<RunSettings>({
-    space: "low_null",
-    fleet_size: 15,
-    expected_isk: 15_000_000,
-    lp_per_char: 2_000,
-    isk_per_lp: 1400,
-    break_threshold_minutes: 25,
-    run_start: null,
-  });
+  const {
+    focus,
+    error,
+    settings,
+    enriching,
+    scopeBusy,
+    deleting,
+    open,
+    analyze,
+    reenrich,
+    pasteManifest,
+    importWallet,
+    setScope,
+    setSessionSettings,
+    setSpaceAndFleet,
+    setConstellation,
+    clearWalletTray,
+    deleteRun,
+    deleteSpawn,
+    clearAll,
+    patchAppSettings,
+  } = useRunDesk();
 
   const [ammo, setAmmo] = useState(() => {
     try {
@@ -109,146 +112,52 @@ export function ToolsApp() {
 
   const ammoResult = useMemo(() => computeAmmoLoad(ammo), [ammo]);
 
+  const enrichPrelude = () => ({
+    gamelogsDir: gamelogsPath,
+    fcCharacter,
+    ammoLaunchers: ammo.launchers,
+    ammoPerLauncher: ammo.ammoPerLauncher,
+  });
+
   useEffect(() => {
     localStorage.setItem("incfleetchat.ammo", JSON.stringify(ammo));
   }, [ammo]);
 
-  const applyFocus = useCallback((f: EditionFocus) => {
-    setFocus(f);
-    setSettings(f.session_settings);
-    setError(null);
-  }, []);
-
   useEffect(() => {
-    void invoke<EditionFocus>("run_desk_open")
-      .then(applyFocus)
-      .catch((e: unknown) => setError(String(e)));
+    void open();
     void invoke<ToolsSettings>("get_settings").then((s) => {
       setGamelogsPath(s.gamelogs_dir ?? "");
       setFcCharacter(s.fc_character ?? "");
     });
-  }, [applyFocus]);
+  }, [open]);
 
   async function persistToolsSettings() {
-    try {
-      await invoke("set_settings", {
-        patch: {
-          gamelogs_dir: gamelogsPath.trim() || null,
-          fc_character: fcCharacter.trim() || null,
-        },
-      });
-    } catch (e) {
-      setError(String(e));
-      throw e;
-    }
-  }
-
-  async function syncAmmoSettings() {
-    await invoke("set_settings", {
-      patch: {
-        ammo_launchers: ammo.launchers,
-        ammo_per_launcher: ammo.ammoPerLauncher,
-      },
+    await patchAppSettings({
+      gamelogs_dir: gamelogsPath.trim() || null,
+      fc_character: fcCharacter.trim() || null,
     });
   }
 
-  async function reenrich() {
-    try {
-      setEnriching(true);
-      await persistToolsSettings();
-      await syncAmmoSettings();
-      const runId = focus?.scope.kind === "run" ? focus.scope.run_id : undefined;
-      const f = await invoke<EditionFocus>("run_desk_reenrich", { runId });
-      applyFocus(f);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setEnriching(false);
+  async function onImportWallet(replace: boolean) {
+    if (replace) {
+      setWalletBuffer(walletPaste);
+    } else {
+      setWalletBuffer((b) => (b ? `${b}\n${walletPaste}` : walletPaste));
     }
-  }
-
-  async function syncSettings(next: RunSettings) {
-    setSettings(next);
-    const f = await invoke<EditionFocus>("run_desk_amend", {
-      op: { op: "set_session_settings", settings: next },
-    });
-    applyFocus(f);
-  }
-
-  async function onSpaceOrFleet(space: SpaceBand, fleet_size: number) {
-    const ticket = await invoke<PayoutTicket>("lookup_vanguard_payout", {
-      space,
-      fleetSize: fleet_size,
-    });
-    await syncSettings({
-      ...settings,
-      space,
-      fleet_size,
-      expected_isk: ticket.isk,
-      lp_per_char: ticket.lp_per_char,
+    const f = await importWallet(walletPaste, replace);
+    if (!f) return;
+    setWalletPaste("");
+    requestAnimationFrame(() => {
+      const el = walletRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
     });
   }
 
-  async function pasteManifest() {
-    try {
-      const f = await invoke<EditionFocus>("run_desk_paste", {
-        tray: "manifest",
-        text: manifestPaste,
-      });
-      applyFocus(f);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function importWallet(replace: boolean) {
-    try {
-      if (replace) {
-        await invoke("run_desk_amend", { op: { op: "clear_wallet_tray" } });
-        setWalletBuffer(walletPaste);
-      } else {
-        setWalletBuffer((b) => (b ? `${b}\n${walletPaste}` : walletPaste));
-      }
-      const f = await invoke<EditionFocus>("run_desk_paste", {
-        tray: "wallet",
-        text: walletPaste,
-      });
-      applyFocus(f);
-      setWalletPaste("");
-      requestAnimationFrame(() => {
-        const el = walletRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
-      });
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function analyze() {
-    try {
-      setEnriching(true);
-      await syncSettings(settings);
-      await syncAmmoSettings();
-      const f = await invoke<EditionFocus>("run_desk_analyze");
-      applyFocus(f);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setEnriching(false);
-    }
-  }
-
-  async function setScope(scope: ReportScope) {
-    try {
-      setScopeBusy(true);
-      const f = await invoke<EditionFocus>("run_desk_focus", { scope });
-      applyFocus(f);
-      setSiteDrill(null);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setScopeBusy(false);
-    }
+  async function onSetScope(
+    scope: Parameters<typeof setScope>[0],
+  ) {
+    await setScope(scope);
+    setSiteDrill(null);
   }
 
   async function onDeleteScope() {
@@ -261,17 +170,7 @@ export function ToolsApp() {
         `Delete run ${scope.run_id}? This cannot be undone.`,
       );
       if (!ok) return;
-      try {
-        setDeleting(true);
-        const f = await invoke<EditionFocus>("run_desk_delete_run", {
-          runId: scope.run_id,
-        });
-        applyFocus(f);
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setDeleting(false);
-      }
+      await deleteRun(scope.run_id);
       return;
     }
 
@@ -285,17 +184,7 @@ export function ToolsApp() {
         `Delete spawn ${scope.constellation} and ${n} runs? This cannot be undone.`,
       );
       if (!ok) return;
-      try {
-        setDeleting(true);
-        const f = await invoke<EditionFocus>("run_desk_delete_spawn", {
-          constellation: scope.constellation,
-        });
-        applyFocus(f);
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setDeleting(false);
-      }
+      await deleteSpawn(scope.constellation);
       return;
     }
 
@@ -306,15 +195,7 @@ export function ToolsApp() {
       `Delete ALL analytics data (${n} runs, ${m} spawns)? This cannot be undone.`,
     );
     if (!ok) return;
-    try {
-      setDeleting(true);
-      const f = await invoke<EditionFocus>("run_desk_clear_all");
-      applyFocus(f);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setDeleting(false);
-    }
+    await clearAll();
   }
 
   const deleteDisabled =
@@ -459,14 +340,14 @@ export function ToolsApp() {
                 }
                 onChange={(e) => {
                   const v = e.target.value;
-                  if (v === "overall") void setScope({ kind: "overall" });
+                  if (v === "overall") void onSetScope({ kind: "overall" });
                   else if (v.startsWith("spawn:"))
-                    void setScope({
+                    void onSetScope({
                       kind: "spawn",
                       constellation: v.slice(6),
                     });
                   else if (v.startsWith("run:"))
-                    void setScope({ kind: "run", run_id: v.slice(4) });
+                    void onSetScope({ kind: "run", run_id: v.slice(4) });
                 }}
               >
                 <option value="overall">Overall</option>
@@ -496,7 +377,10 @@ export function ToolsApp() {
                 className="ml-2 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
                 value={settings.space}
                 onChange={(e) =>
-                  void onSpaceOrFleet(e.target.value as SpaceBand, settings.fleet_size)
+                  void setSpaceAndFleet(
+                    e.target.value as SpaceBand,
+                    settings.fleet_size,
+                  )
                 }
               >
                 <option value="low_null">Low / Null</option>
@@ -511,7 +395,10 @@ export function ToolsApp() {
                 className="ml-2 w-16 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
                 value={settings.fleet_size}
                 onChange={(e) =>
-                  void onSpaceOrFleet(settings.space, Number(e.target.value) || 1)
+                  void setSpaceAndFleet(
+                    settings.space,
+                    Number(e.target.value) || 1,
+                  )
                 }
               />
             </label>
@@ -522,7 +409,7 @@ export function ToolsApp() {
                 className="ml-2 w-28 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
                 value={settings.expected_isk}
                 onChange={(e) =>
-                  void syncSettings({
+                  void setSessionSettings({
                     ...settings,
                     expected_isk: Number(e.target.value) || 0,
                   })
@@ -536,7 +423,7 @@ export function ToolsApp() {
                 className="ml-2 w-20 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
                 value={settings.lp_per_char}
                 onChange={(e) =>
-                  void syncSettings({
+                  void setSessionSettings({
                     ...settings,
                     lp_per_char: Number(e.target.value) || 0,
                   })
@@ -550,7 +437,7 @@ export function ToolsApp() {
                 className="ml-2 w-20 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
                 value={settings.isk_per_lp}
                 onChange={(e) =>
-                  void syncSettings({
+                  void setSessionSettings({
                     ...settings,
                     isk_per_lp: Number(e.target.value) || 0,
                   })
@@ -564,7 +451,7 @@ export function ToolsApp() {
                 className="ml-2 w-16 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
                 value={settings.break_threshold_minutes}
                 onChange={(e) =>
-                  void syncSettings({
+                  void setSessionSettings({
                     ...settings,
                     break_threshold_minutes: Number(e.target.value) || 25,
                   })
@@ -583,7 +470,7 @@ export function ToolsApp() {
                 }
                 onChange={(e) => {
                   const v = e.target.value;
-                  void syncSettings({
+                  void setSessionSettings({
                     ...settings,
                     run_start: v ? `${v}:00Z` : null,
                   });
@@ -596,12 +483,7 @@ export function ToolsApp() {
                 className="ml-2 w-24 rounded border border-border bg-surface-raised px-2 py-1 text-fg"
                 value={focus?.staging_spawn?.constellation ?? ""}
                 onChange={(e) => {
-                  void invoke<EditionFocus>("run_desk_amend", {
-                    op: {
-                      op: "set_constellation",
-                      constellation: e.target.value,
-                    },
-                  }).then(applyFocus);
+                  void setConstellation(e.target.value);
                 }}
                 placeholder="4MY-AB"
               />
@@ -639,7 +521,7 @@ export function ToolsApp() {
               />
               <button
                 type="button"
-                onClick={() => void pasteManifest()}
+                onClick={() => void pasteManifest(manifestPaste)}
                 className="mt-1 rounded border border-border px-2 py-1 text-xs hover:border-accent/40"
               >
                 Apply Manifest
@@ -667,14 +549,14 @@ export function ToolsApp() {
               <div className="mt-1 flex gap-2">
                 <button
                   type="button"
-                  onClick={() => void importWallet(true)}
+                  onClick={() => void onImportWallet(true)}
                   className="rounded border border-border px-2 py-1 text-xs hover:border-accent/40"
                 >
                   Import
                 </button>
                 <button
                   type="button"
-                  onClick={() => void importWallet(false)}
+                  onClick={() => void onImportWallet(false)}
                   className="rounded border border-border px-2 py-1 text-xs hover:border-accent/40"
                 >
                   Import more
@@ -682,13 +564,14 @@ export function ToolsApp() {
                 <button
                   type="button"
                   onClick={() => {
-                    void invoke<EditionFocus>("run_desk_amend", {
-                      op: { op: "clear_wallet_tray" },
-                    }).then((f) => {
-                      applyFocus(f);
-                      setWalletBuffer("");
-                      setWalletPaste("");
-                    });
+                    void clearWalletTray()
+                      .then(() => {
+                        setWalletBuffer("");
+                        setWalletPaste("");
+                      })
+                      .catch(() => {
+                        /* error already on desk.error */
+                      });
                   }}
                   className="rounded border border-border px-2 py-1 text-xs hover:border-overdue/40"
                 >
@@ -696,7 +579,7 @@ export function ToolsApp() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => void analyze()}
+                  onClick={() => void analyze(enrichPrelude())}
                   className="rounded border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent"
                 >
                   Analyze
@@ -722,7 +605,7 @@ export function ToolsApp() {
               <button
                 type="button"
                 disabled={!canReenrich || enriching}
-                onClick={() => void reenrich()}
+                onClick={() => void reenrich(enrichPrelude())}
                 className={cn(
                   "rounded border px-2 py-1 text-xs",
                   canReenrich && !enriching
