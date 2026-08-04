@@ -124,10 +124,14 @@ _Avoid_: miss rate (when meaning the UI label)
 The display module that owns expended, dead volleys, dead missiles, Hit %, Miss %, sums, hour aggregation, and activity filtering for `MissileStat` rows. Callers must not re-derive Hit % / Miss % themselves.
 _Avoid_: missileDerived, missile helpers
 
+**Joined Results**:
+The Tools analytics Results surface that joins the EditionFocus wallet report with enrichment (via the join module) — sort, hourly buckets, site list, and missile drill-down.
+_Avoid_: Results tab, analytics UI, ToolsApp (the shell)
+
 ### Ammo
 
 **Ammo planner**:
-The Tools Ammo tab math for stock, launchers, and load-into-ship — outside RunDesk. Durable launcher/ammo prefs live in Tools settings (not localStorage).
+The Tools Ammo tab for stock, launchers, and load-into-ship — outside RunDesk. Durable launcher/ammo prefs live in Tools settings (not localStorage); ephemeral stock/ship/reload stay on the tab.
 _Avoid_: RunDesk (ammo does not go through it)
 
 **Overlay settings**:
