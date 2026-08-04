@@ -5,7 +5,7 @@ import type {
   EnrichmentSnapshot,
   HourlyBucket,
   SiteDetail,
-} from "./analyticsTypes";
+} from "./analyticsInternals";
 import {
   joinAnalytics,
   joinHours,

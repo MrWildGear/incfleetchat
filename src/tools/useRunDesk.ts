@@ -2,15 +2,12 @@ import { useCallback, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   EditionFocus,
+  EnrichPrelude,
   ReportScope,
   RunSettings,
   SpaceBand,
-} from "../lib/analyticsTypes";
-import {
-  createRunDesk,
-  type EnrichPrelude,
-  type RunDesk,
-} from "../lib/runDesk";
+} from "../lib/runDeskTypes";
+import { createRunDesk, type RunDesk } from "../lib/runDesk";
 
 const defaultSettings: RunSettings = {
   space: "low_null",

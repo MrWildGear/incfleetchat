@@ -1,31 +1,18 @@
 import type {
+  AmendOp,
   EditionFocus,
+  EnrichPrelude,
   PayoutTicket,
   ReportScope,
   RunSettings,
   SpaceBand,
-} from "./analyticsTypes";
+} from "./runDeskTypes";
 
 /** Tauri-compatible invoke used as the RunDesk adapter. */
 export type DeskInvoke = <T>(
   cmd: string,
   args?: Record<string, unknown>,
 ) => Promise<T>;
-
-export type EnrichPrelude = {
-  gamelogsDir: string;
-  fcCharacter: string;
-  ammoLaunchers: number;
-  ammoPerLauncher: number;
-};
-
-export type AmendOp =
-  | { op: "clear_wallet_tray" }
-  | { op: "set_session_settings"; settings: RunSettings }
-  | { op: "reopen_trays" }
-  | { op: "open_run"; run_id: string }
-  | { op: "set_constellation"; constellation: string }
-  | { op: "reenrich_run"; run_id: string | null };
 
 export type RunDesk = {
   open(): Promise<EditionFocus>;

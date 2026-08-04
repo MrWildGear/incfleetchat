@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRunDesk, type DeskInvoke } from "./runDesk";
-import type { EditionFocus, RunSettings } from "./analyticsTypes";
+import type { EditionFocus, RunSettings } from "./runDeskTypes";
 
 const defaultSettings: RunSettings = {
   space: "low_null",

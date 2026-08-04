@@ -4,7 +4,7 @@ import type {
   EnrichmentSnapshot,
   HourlyBucket,
   SiteDetail,
-} from "./analyticsTypes";
+} from "./analyticsInternals";
 import { forHour, sum } from "./missileRates";
 import { utcHourFloorMs } from "./utcHour";
 

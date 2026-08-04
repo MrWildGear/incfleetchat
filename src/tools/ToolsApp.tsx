@@ -7,7 +7,7 @@ import {
   formatLp,
   formatPercent,
 } from "../lib/formatAnalytics";
-import type { SpaceBand } from "../lib/analyticsTypes";
+import type { SpaceBand } from "../lib/runDeskTypes";
 import { joinAnalytics } from "../lib/joinedResults";
 import { activeOnly, isActive, of, sum } from "../lib/missileRates";
 import { cn } from "../lib/utils";

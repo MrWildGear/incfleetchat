@@ -1,19 +1,4 @@
-export type SpaceBand = "highsec" | "low_null";
-
-export type RunSettings = {
-  space: SpaceBand;
-  fleet_size: number;
-  expected_isk: number;
-  lp_per_char: number;
-  isk_per_lp: number;
-  break_threshold_minutes: number;
-  run_start: string | null;
-};
-
-export type ReportScope =
-  | { kind: "overall" }
-  | { kind: "spawn"; constellation: string }
-  | { kind: "run"; run_id: string };
+/** Nested analytics wire shapes. Import only from join/rate modules and runDeskTypes. */
 
 export type SiteDetail = {
   occurred_at: string;
@@ -86,16 +71,12 @@ export type SpawnDraft = {
   title: string | null;
 };
 
-export type EnrichmentSource = "fc" | "borrowed" | "heuristic" | "fleet";
-
-export type EnrichmentSite = {
-  occurred_at: string;
-  approach_seconds: number | null;
-  combat_to_payout_seconds: number | null;
-  is_break: boolean;
-  source: EnrichmentSource;
-  missiles: MissileStat[];
+export type Diagnostic = {
+  level: string;
+  message: string;
 };
+
+export type EnrichmentSource = "fc" | "borrowed" | "heuristic" | "fleet";
 
 export type MissileStat = {
   listener: string;
@@ -105,6 +86,15 @@ export type MissileStat = {
   /** Launchers at enrich time (= missiles per volley). */
   launchers: number;
   dead: number;
+};
+
+export type EnrichmentSite = {
+  occurred_at: string;
+  approach_seconds: number | null;
+  combat_to_payout_seconds: number | null;
+  is_break: boolean;
+  source: EnrichmentSource;
+  missiles: MissileStat[];
 };
 
 export type EnrichmentTotals = {
@@ -118,28 +108,8 @@ export type EnrichmentSnapshot = {
   resolved_fc: string | null;
   /** Listener headers used (all listeners with logs in range). */
   listeners: string[];
-  diagnostics: { level: string; message: string }[];
+  diagnostics: Diagnostic[];
   sites: EnrichmentSite[];
   missiles: MissileStat[];
   totals: EnrichmentTotals;
 };
-
-export type EditionFocus = {
-  trays: {
-    manifest: string;
-    wallet_batches: number;
-    pending_sites: number;
-  };
-  spawn: SpawnSummary | null;
-  catalog: { spawns: SpawnSummary[]; runs: RunSummary[] };
-  scope: ReportScope;
-  report: AnalyticsReport | null;
-  diagnostics: { level: string; message: string }[];
-  session_settings: RunSettings;
-  staging_spawn: SpawnDraft | null;
-  /** Most recently sealed run in this session; re-enrichable at any scope. */
-  sealed_run_id: string | null;
-  enrichment: EnrichmentSnapshot | null;
-};
-
-export type PayoutTicket = { isk: number; lp_per_char: number };

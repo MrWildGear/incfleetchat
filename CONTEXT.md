@@ -37,8 +37,8 @@ The Tools analytics document session: trays, analyze, focus scope (Overall / Spa
 _Avoid_: ToolsApp, analytics service, session manager
 
 **EditionFocus**:
-The always-returned RunDesk snapshot the UI renders after an operation (trays, catalog, scope, report, enrichment, diagnostics).
-_Avoid_: focus state, view model, board (overlay term)
+The always-returned RunDesk snapshot the UI renders after an operation (trays, catalog, scope, report, enrichment, diagnostics). The Tools shell’s public contract — not the nested report/enrichment field catalog.
+_Avoid_: analytics types, focus state, view model, board (overlay term)
 
 **Tray**:
 A staging slot for pasted text before Analyze — Manifest or wallet journal (wallet may append in batches).
