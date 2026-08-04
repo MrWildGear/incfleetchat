@@ -14,7 +14,7 @@
 - Do **not** change dead formula: `dead = max(0, expended − hits)`
 - Do **not** store derived fields (`dead_cycles`, percentages) in JSON
 - Dead cycles: `floor(dead / missiles_per_cycle)`
-- Hit % / Miss %: vs expended; show `—` when expended = 0
+- Hit % / Miss %: Hit % = dead/expended, Miss % = hits/expended; show `—` when expended = 0
 - Site window: `(gap_start, occurred_at]` via existing `events_in_gap`
 - Breaks and unalignable first sites: `missiles: []`
 - Missile drill-down layers only when `scope.kind === "run"`

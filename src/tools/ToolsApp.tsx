@@ -858,7 +858,7 @@ export function ToolsApp() {
                     value={formatPercent(
                       fleetMissileSum.expended === 0
                         ? null
-                        : fleetMissileSum.hits / fleetMissileSum.expended,
+                        : fleetMissileSum.dead / fleetMissileSum.expended,
                     )}
                   />
                   <Row
@@ -866,7 +866,7 @@ export function ToolsApp() {
                     value={formatPercent(
                       fleetMissileSum.expended === 0
                         ? null
-                        : fleetMissileSum.dead / fleetMissileSum.expended,
+                        : fleetMissileSum.hits / fleetMissileSum.expended,
                     )}
                   />
                   <p className="text-[10px] text-muted">
@@ -1130,7 +1130,7 @@ export function ToolsApp() {
                       value={formatPercent(
                         siteDrillSum.expended === 0
                           ? null
-                          : siteDrillSum.hits / siteDrillSum.expended,
+                          : siteDrillSum.dead / siteDrillSum.expended,
                       )}
                     />
                     <Row
@@ -1138,7 +1138,7 @@ export function ToolsApp() {
                       value={formatPercent(
                         siteDrillSum.expended === 0
                           ? null
-                          : siteDrillSum.dead / siteDrillSum.expended,
+                          : siteDrillSum.hits / siteDrillSum.expended,
                       )}
                     />
                   </div>

@@ -14,19 +14,19 @@ export function deadCycles(
 }
 
 export function hitRate(
-  m: Pick<MissileStat, "hits" | "reload_cycles" | "missiles_per_cycle">,
-): number | null {
-  const e = expended(m);
-  if (e === 0) return null;
-  return m.hits / e;
-}
-
-export function missRate(
   m: Pick<MissileStat, "dead" | "reload_cycles" | "missiles_per_cycle">,
 ): number | null {
   const e = expended(m);
   if (e === 0) return null;
   return m.dead / e;
+}
+
+export function missRate(
+  m: Pick<MissileStat, "hits" | "reload_cycles" | "missiles_per_cycle">,
+): number | null {
+  const e = expended(m);
+  if (e === 0) return null;
+  return m.hits / e;
 }
 
 export function formatPercent(rate: number | null): string {

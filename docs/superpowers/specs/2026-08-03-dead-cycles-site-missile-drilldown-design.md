@@ -32,7 +32,7 @@ Today missile stats exist only at run level (`MissileStat` on `EnrichmentSnapsho
 | Topic | Choice |
 |-------|--------|
 | Dead cycles | `floor(dead_missiles / missiles_per_cycle)` |
-| Hit % / Miss % | `hits / expended`, `dead / expended`; `—` if expended = 0 |
+| Hit % / Miss % | `dead / expended`, `hits / expended`; `—` if expended = 0 |
 | Expended | `reload_cycles × missiles_per_cycle` |
 | Site window | Same gap as timing: `(gap_start, occurred_at]` |
 | Breaks | `missiles: []` on the site; run-level totals still include break-gap events |
@@ -49,13 +49,13 @@ Today missile stats exist only at run level (`MissileStat` on `EnrichmentSnapsho
 expended     = reload_cycles × missiles_per_cycle
 dead         = max(0, expended − hits)          # already stored
 dead_cycles  = floor(dead / missiles_per_cycle)
-hit_pct      = hits / expended                  # undefined if expended = 0
-miss_pct     = dead / expended                  # undefined if expended = 0
+hit_pct      = dead / expended                  # undefined if expended = 0
+miss_pct     = hits / expended                  # undefined if expended = 0
 ```
 
 Derived values are **not** persisted. Shared TypeScript helpers (and Rust tests at the enrich seam) own the math.
 
-Fleet Summary rates use **fleet hits / fleet expended** (sum base counts, then derive). Fleet **Dead cycles** = sum of each listener’s `dead_cycles`.
+Fleet Summary rates use **fleet dead / fleet expended** for Hit % and **fleet hits / fleet expended** for Miss % (sum base counts, then derive). Fleet **Dead cycles** = sum of each listener’s `dead_cycles`.
 
 ## Data model
 
@@ -102,7 +102,7 @@ After combat timing rows:
 | Hits | Σ listener hits |
 | Dead missiles | `totals.fleet_dead` |
 | Dead cycles | Σ per-listener dead_cycles |
-| Hit % / Miss % | fleet hits / fleet expended; `—` if expended = 0 |
+| Hit % / Miss % | Hit % = fleet dead / fleet expended; Miss % = fleet hits / fleet expended; `—` if expended = 0 |
 
 Keep the incomplete-magazine undercount note.
 
@@ -120,7 +120,7 @@ Filter with existing `hasMissileActivity`. Format percentages to **one decimal**
 | 1 | Site totals: Reload cycles, Hits, Dead cycles, Dead missiles, Hit %, Miss %; Back → 0; open listeners → 2 |
 | 2 | Per-listener table for that site (same columns as Listeners); Back → 1 |
 
-**Level 1 aggregation:** same rule as fleet Summary — sum base counts (`reload_cycles`, `hits`, `dead`, per-listener `expended` / `dead_cycles`), then derive Hit % / Miss % from **summed** hits and expended (do not average per-listener percentages).
+**Level 1 aggregation:** same rule as fleet Summary — sum base counts (`reload_cycles`, `hits`, `dead`, per-listener `expended` / `dead_cycles`), then derive Hit % = summed dead / expended and Miss % = summed hits / expended (do not average per-listener percentages).
 
 Sites with empty `missiles` (breaks and unalignable first sites) are **not clickable** for missile layers; they remain visible in the level-0 timing table only.
 

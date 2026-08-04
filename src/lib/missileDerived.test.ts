@@ -18,15 +18,15 @@ describe("missileDerived", () => {
     expect(deadCycles({ dead: 312, missiles_per_cycle: 156 })).toBe(2);
   });
 
-  it("hitRate and missRate use expended; null when expended is 0", () => {
-    expect(hitRate({ hits: 100, reload_cycles: 2, missiles_per_cycle: 156 })).toBeCloseTo(
-      100 / 312,
-    );
-    expect(missRate({ dead: 212, reload_cycles: 2, missiles_per_cycle: 156 })).toBeCloseTo(
+  it("hitRate is dead/expended; missRate is hits/expended; null when expended is 0", () => {
+    expect(hitRate({ dead: 212, reload_cycles: 2, missiles_per_cycle: 156 })).toBeCloseTo(
       212 / 312,
     );
-    expect(hitRate({ hits: 0, reload_cycles: 0, missiles_per_cycle: 156 })).toBeNull();
-    expect(missRate({ dead: 0, reload_cycles: 0, missiles_per_cycle: 156 })).toBeNull();
+    expect(missRate({ hits: 100, reload_cycles: 2, missiles_per_cycle: 156 })).toBeCloseTo(
+      100 / 312,
+    );
+    expect(hitRate({ dead: 0, reload_cycles: 0, missiles_per_cycle: 156 })).toBeNull();
+    expect(missRate({ hits: 0, reload_cycles: 0, missiles_per_cycle: 156 })).toBeNull();
   });
 
   it("formatPercent shows one decimal or em dash", () => {
