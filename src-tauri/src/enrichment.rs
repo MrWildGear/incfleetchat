@@ -173,6 +173,36 @@ fn missile_stats(logs: &[ListenerLog], missiles_per_cycle: u32) -> Vec<MissileSt
         .collect()
 }
 
+fn missile_stats_in_gap(
+    logs: &[ListenerLog],
+    missiles_per_cycle: u32,
+    gap_start: DateTime<Utc>,
+    gap_end: DateTime<Utc>,
+) -> Vec<MissileStat> {
+    logs.iter()
+        .map(|l| {
+            let events = events_in_gap(l, gap_start, gap_end);
+            let reload_cycles = events
+                .iter()
+                .filter(|e| e.kind == GamelogEventKind::Reload)
+                .count() as u32;
+            let hits = events
+                .iter()
+                .filter(|e| e.kind == GamelogEventKind::CombatHit)
+                .count() as u32;
+            let expended = reload_cycles.saturating_mul(missiles_per_cycle);
+            let dead = expended.saturating_sub(hits);
+            MissileStat {
+                listener: l.listener.clone(),
+                reload_cycles,
+                hits,
+                missiles_per_cycle,
+                dead,
+            }
+        })
+        .collect()
+}
+
 /// Enrich a sealed run's wallet sites with gamelog-derived approach/combat→payout
 /// splits and per-character dead-missile counts.
 ///
@@ -252,13 +282,20 @@ pub fn enrich_run(
             counted.push((approach_seconds, combat_to_payout_seconds));
         }
 
+        let site_missiles = match gap_start {
+            Some(gs) if !is_break => {
+                missile_stats_in_gap(logs, missiles_per_cycle, gs, occurred_at)
+            }
+            _ => Vec::new(),
+        };
+
         sites.push(EnrichmentSite {
             occurred_at,
             approach_seconds,
             combat_to_payout_seconds,
             is_break,
             source,
-            missiles: vec![],
+            missiles: site_missiles,
         });
     }
 
@@ -773,5 +810,96 @@ mod tests {
             Some("Bob"),
             "falls back to fewest following_warp events"
         );
+    }
+
+    #[test]
+    fn site_missiles_count_only_events_in_gap() {
+        // Site0 payout 20:10, site1 payout 20:20. run_start 20:00.
+        // Gap1 = (20:10, 20:20]: reload+50 hits inside; reload+hits in gap0 must not appear on site1.
+        let gunner = listener_log(
+            "Gunner",
+            vec![
+                ev(20, 5, 0, GamelogEventKind::Reload),
+                ev(20, 6, 0, GamelogEventKind::CombatHit),
+                ev(20, 12, 0, GamelogEventKind::Reload),
+            ]
+            .into_iter()
+            .chain((0..50).map(|i| ev(20, 15, i % 60, GamelogEventKind::CombatHit)))
+            .collect(),
+        );
+        let snap = enrich_run(
+            &[gunner],
+            &[ts(20, 10, 0), ts(20, 20, 0)],
+            &[Some(600), Some(600)],
+            25,
+            Some(ts(20, 0, 0)),
+            156,
+            None,
+            None,
+        );
+
+        assert!(snap.sites[0].missiles.iter().any(|m| m.listener == "Gunner"));
+        let s0 = snap.sites[0]
+            .missiles
+            .iter()
+            .find(|m| m.listener == "Gunner")
+            .unwrap();
+        assert_eq!(s0.reload_cycles, 1);
+        assert_eq!(s0.hits, 1);
+
+        let s1 = snap.sites[1]
+            .missiles
+            .iter()
+            .find(|m| m.listener == "Gunner")
+            .unwrap();
+        assert_eq!(s1.reload_cycles, 1);
+        assert_eq!(s1.hits, 50);
+        assert_eq!(s1.dead, 156 - 50);
+    }
+
+    #[test]
+    fn break_site_has_empty_missiles_but_run_totals_keep_break_gap_events() {
+        // Short site then long break (>25m). Reload during break gap still in run-level missiles.
+        let gunner = listener_log(
+            "Gunner",
+            vec![
+                ev(20, 5, 0, GamelogEventKind::Reload),
+                ev(20, 40, 0, GamelogEventKind::Reload), // inside break gap after 20:10
+            ],
+        );
+        let snap = enrich_run(
+            &[gunner],
+            &[ts(20, 10, 0), ts(21, 0, 0)],
+            &[Some(600), None], // second site non-countable -> break if gap > threshold
+            25,
+            Some(ts(20, 0, 0)),
+            156,
+            None,
+            None,
+        );
+
+        assert!(snap.sites[1].is_break);
+        assert!(snap.sites[1].missiles.is_empty());
+        let run = snap.missiles.iter().find(|m| m.listener == "Gunner").unwrap();
+        assert_eq!(run.reload_cycles, 2);
+    }
+
+    #[test]
+    fn unalignable_first_site_has_empty_missiles() {
+        let gunner = listener_log(
+            "Gunner",
+            vec![ev(20, 1, 0, GamelogEventKind::Reload)],
+        );
+        let snap = enrich_run(
+            &[gunner],
+            &[ts(20, 10, 0)],
+            &[Some(600)],
+            25,
+            None, // no run_start -> no gap_start
+            156,
+            None,
+            None,
+        );
+        assert!(snap.sites[0].missiles.is_empty());
     }
 }
