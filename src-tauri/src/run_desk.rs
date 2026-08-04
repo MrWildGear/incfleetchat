@@ -204,7 +204,8 @@ impl RunDesk {
         let wallet_start = settings.run_start.unwrap_or(site_times[0]);
         let wallet_end = *site_times.last().unwrap();
 
-        let missiles_per_cycle = (app_settings.ammo_launchers.max(0) as u32)
+        let launchers = app_settings.ammo_launchers.max(0) as u32;
+        let missiles_per_cycle = launchers
             .saturating_mul(app_settings.ammo_per_launcher.max(0) as u32);
 
         let scan = if gamelogs_dir.is_dir() {
@@ -231,6 +232,7 @@ impl RunDesk {
             settings.break_threshold_minutes,
             settings.run_start,
             missiles_per_cycle,
+            launchers,
             app_settings.fc_character.as_deref(),
             wallet_fc_hint.as_deref(),
         );
@@ -618,6 +620,7 @@ pub fn aggregate_enrichments(
                     existing.dead += m.dead;
                     // Latest contributing run wins; do not sum missiles/cycle.
                     existing.missiles_per_cycle = m.missiles_per_cycle;
+                    existing.launchers = m.launchers;
                 }
                 None => missiles.push(m.clone()),
             }
@@ -722,6 +725,7 @@ mod tests {
             reload_cycles: cycles,
             hits,
             missiles_per_cycle: per_cycle,
+            launchers: 6,
             dead,
         }
     }

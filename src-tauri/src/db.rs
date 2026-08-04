@@ -669,6 +669,7 @@ mod tests {
                 reload_cycles: 1,
                 hits: 5,
                 missiles_per_cycle: 156,
+                launchers: 6,
                 dead: 151,
             }],
             totals: EnrichmentTotals {

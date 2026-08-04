@@ -102,6 +102,8 @@ export type MissileStat = {
   reload_cycles: number;
   hits: number;
   missiles_per_cycle: number;
+  /** Launchers at enrich time (= missiles per volley). */
+  launchers: number;
   dead: number;
 };
 

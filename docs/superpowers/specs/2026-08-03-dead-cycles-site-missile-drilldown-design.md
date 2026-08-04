@@ -31,9 +31,10 @@ Today missile stats exist only at run level (`MissileStat` on `EnrichmentSnapsho
 
 | Topic | Choice |
 |-------|--------|
-| Dead cycles | `floor(dead_missiles / missiles_per_cycle)` |
-| Hit % / Miss % | `dead / expended`, `hits / expended`; `—` if expended = 0 |
+| Dead cycles | Replaced by **Dead volleys** = `floor(dead_missiles / launchers)` |
+| Hit % / Miss % | `hits / expended`, `dead / expended`; `—` if expended = 0 |
 | Expended | `reload_cycles × missiles_per_cycle` |
+| Volley size | `launchers` persisted on each `MissileStat` at enrich time |
 | Site window | Same gap as timing: `(gap_start, occurred_at]` |
 | Breaks | `missiles: []` on the site; run-level totals still include break-gap events |
 | Unalignable first site (no gap_start) | `missiles: []` |
@@ -48,14 +49,15 @@ Today missile stats exist only at run level (`MissileStat` on `EnrichmentSnapsho
 ```
 expended     = reload_cycles × missiles_per_cycle
 dead         = max(0, expended − hits)          # already stored
-dead_cycles  = floor(dead / missiles_per_cycle)
-hit_pct      = dead / expended                  # undefined if expended = 0
-miss_pct     = hits / expended                  # undefined if expended = 0
+dead_cycles  = (removed — use dead_volleys)
+dead_volleys = floor(dead / launchers)          # launchers = ammo launchers at enrich
+hit_pct      = hits / expended                  # undefined if expended = 0
+miss_pct     = dead / expended                  # undefined if expended = 0
 ```
 
 Derived values are **not** persisted. Shared TypeScript helpers (and Rust tests at the enrich seam) own the math.
 
-Fleet Summary rates use **fleet dead / fleet expended** for Hit % and **fleet hits / fleet expended** for Miss % (sum base counts, then derive). Fleet **Dead cycles** = sum of each listener’s `dead_cycles`.
+Fleet Summary rates use **fleet hits / fleet expended** for Hit % and **fleet dead / fleet expended** for Miss %. Fleet **Dead volleys** = sum of each listener’s `dead_volleys`.
 
 ## Data model
 

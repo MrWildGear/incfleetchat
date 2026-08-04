@@ -150,7 +150,11 @@ fn clip_to_window(
 }
 
 /// Compute per-listener dead missiles over the run window.
-fn missile_stats(logs: &[ListenerLog], missiles_per_cycle: u32) -> Vec<MissileStat> {
+fn missile_stats(
+    logs: &[ListenerLog],
+    missiles_per_cycle: u32,
+    launchers: u32,
+) -> Vec<MissileStat> {
     logs.iter()
         .map(|l| {
             let reload_cycles =
@@ -167,6 +171,7 @@ fn missile_stats(logs: &[ListenerLog], missiles_per_cycle: u32) -> Vec<MissileSt
                 reload_cycles,
                 hits,
                 missiles_per_cycle,
+                launchers,
                 dead,
             }
         })
@@ -176,6 +181,7 @@ fn missile_stats(logs: &[ListenerLog], missiles_per_cycle: u32) -> Vec<MissileSt
 fn missile_stats_in_gap(
     logs: &[ListenerLog],
     missiles_per_cycle: u32,
+    launchers: u32,
     gap_start: DateTime<Utc>,
     gap_end: DateTime<Utc>,
 ) -> Vec<MissileStat> {
@@ -197,6 +203,7 @@ fn missile_stats_in_gap(
                 reload_cycles,
                 hits,
                 missiles_per_cycle,
+                launchers,
                 dead,
             }
         })
@@ -216,6 +223,7 @@ pub fn enrich_run(
     break_threshold_minutes: u32,
     run_start: Option<DateTime<Utc>>,
     missiles_per_cycle: u32,
+    launchers: u32,
     fc_character: Option<&str>,
     wallet_fc_hint: Option<&str>,
 ) -> EnrichmentSnapshot {
@@ -284,7 +292,7 @@ pub fn enrich_run(
 
         let site_missiles = match gap_start {
             Some(gs) if !is_break => {
-                missile_stats_in_gap(logs, missiles_per_cycle, gs, occurred_at)
+                missile_stats_in_gap(logs, missiles_per_cycle, launchers, gs, occurred_at)
             }
             _ => Vec::new(),
         };
@@ -299,7 +307,7 @@ pub fn enrich_run(
         });
     }
 
-    let missiles = missile_stats(logs, missiles_per_cycle);
+    let missiles = missile_stats(logs, missiles_per_cycle, launchers);
     let fleet_dead: u32 = missiles.iter().map(|m| m.dead).sum();
 
     let approach_values: Vec<i64> = counted.iter().filter_map(|(a, _)| *a).collect();
@@ -378,6 +386,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             Some("Pilot"),
             None,
         );
@@ -404,6 +413,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -425,6 +435,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -450,6 +461,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -475,6 +487,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -496,6 +509,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -520,6 +534,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -553,6 +568,7 @@ mod tests {
             25,
             Some(ts(20, 0, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -585,6 +601,7 @@ mod tests {
             25,
             None,
             156,
+            6,
             Some("FC Pilot"),
             None,
         );
@@ -637,6 +654,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -666,6 +684,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -689,6 +708,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             Some("FC Pilot"),
             None,
         );
@@ -714,7 +734,7 @@ mod tests {
         let logs = vec![fc];
         let sites = vec![ts(20, 0, 0), ts(20, 20, 0)];
 
-        let snap = enrich_run(&logs, &sites, &[None, None], 25, None, 156, Some("FC Pilot"), None);
+        let snap = enrich_run(&logs, &sites, &[None, None], 25, None, 156, 6, Some("FC Pilot"), None);
 
         let first = &snap.sites[0];
         assert_eq!(first.approach_seconds, None);
@@ -741,6 +761,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             Some("FC Pilot"),
             None,
         );
@@ -772,6 +793,7 @@ mod tests {
             25,
             Some(ts(19, 55, 0)),
             156,
+            6,
             Some("FC Pilot"),
             None,
         );
@@ -834,6 +856,7 @@ mod tests {
             25,
             Some(ts(20, 0, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -874,6 +897,7 @@ mod tests {
             25,
             Some(ts(20, 0, 0)),
             156,
+            6,
             None,
             None,
         );
@@ -897,6 +921,7 @@ mod tests {
             25,
             None, // no run_start -> no gap_start
             156,
+            6,
             None,
             None,
         );

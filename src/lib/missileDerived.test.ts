@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  deadCycles,
+  deadVolleys,
   expended,
   formatPercent,
   hitRate,
@@ -13,20 +13,25 @@ describe("missileDerived", () => {
     expect(expended({ reload_cycles: 2, missiles_per_cycle: 156 })).toBe(312);
   });
 
-  it("deadCycles is floor(dead / missiles_per_cycle)", () => {
-    expect(deadCycles({ dead: 212, missiles_per_cycle: 156 })).toBe(1);
-    expect(deadCycles({ dead: 312, missiles_per_cycle: 156 })).toBe(2);
+  it("deadVolleys is floor(dead / launchers)", () => {
+    expect(deadVolleys({ dead: 212, launchers: 6 })).toBe(35);
+    expect(deadVolleys({ dead: 312, launchers: 6 })).toBe(52);
+    expect(deadVolleys({ dead: 5, launchers: 6 })).toBe(0);
   });
 
-  it("hitRate is dead/expended; missRate is hits/expended; null when expended is 0", () => {
-    expect(hitRate({ dead: 212, reload_cycles: 2, missiles_per_cycle: 156 })).toBeCloseTo(
-      212 / 312,
-    );
-    expect(missRate({ hits: 100, reload_cycles: 2, missiles_per_cycle: 156 })).toBeCloseTo(
-      100 / 312,
-    );
-    expect(hitRate({ dead: 0, reload_cycles: 0, missiles_per_cycle: 156 })).toBeNull();
-    expect(missRate({ hits: 0, reload_cycles: 0, missiles_per_cycle: 156 })).toBeNull();
+  it("hitRate is hits/expended; missRate is dead/expended; null when expended is 0", () => {
+    expect(
+      hitRate({ hits: 100, reload_cycles: 2, missiles_per_cycle: 156 }),
+    ).toBeCloseTo(100 / 312);
+    expect(
+      missRate({ dead: 212, reload_cycles: 2, missiles_per_cycle: 156 }),
+    ).toBeCloseTo(212 / 312);
+    expect(
+      hitRate({ hits: 0, reload_cycles: 0, missiles_per_cycle: 156 }),
+    ).toBeNull();
+    expect(
+      missRate({ dead: 0, reload_cycles: 0, missiles_per_cycle: 156 }),
+    ).toBeNull();
   });
 
   it("formatPercent shows one decimal or em dash", () => {
@@ -35,13 +40,14 @@ describe("missileDerived", () => {
     expect(formatPercent(1)).toBe("100.0%");
   });
 
-  it("sumMissileStats sums bases and per-listener dead cycles", () => {
+  it("sumMissileStats sums bases and per-listener dead volleys", () => {
     const sum = sumMissileStats([
       {
         listener: "A",
         reload_cycles: 2,
         hits: 100,
         missiles_per_cycle: 156,
+        launchers: 6,
         dead: 212,
       },
       {
@@ -49,6 +55,7 @@ describe("missileDerived", () => {
         reload_cycles: 1,
         hits: 50,
         missiles_per_cycle: 100,
+        launchers: 5,
         dead: 50,
       },
     ]);
@@ -56,6 +63,6 @@ describe("missileDerived", () => {
     expect(sum.hits).toBe(150);
     expect(sum.dead).toBe(262);
     expect(sum.expended).toBe(312 + 100);
-    expect(sum.dead_cycles).toBe(1 + 0); // floor(212/156)+floor(50/100)
+    expect(sum.dead_volleys).toBe(35 + 10); // floor(212/6)+floor(50/5)
   });
 });

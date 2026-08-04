@@ -118,8 +118,8 @@ describe("missileRatesForHour", () => {
         },
       ]),
     ).toEqual({
-      hitPct: 312 / 468,
-      missPct: 156 / 468,
+      hitPct: 156 / 468,
+      missPct: 312 / 468,
     });
   });
 });

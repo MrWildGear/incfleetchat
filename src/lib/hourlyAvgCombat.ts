@@ -60,5 +60,5 @@ export function missileRatesForHour(
     }
   }
   if (expended === 0) return { hitPct: null, missPct: null };
-  return { hitPct: dead / expended, missPct: hits / expended };
+  return { hitPct: hits / expended, missPct: dead / expended };
 }

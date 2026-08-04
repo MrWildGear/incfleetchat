@@ -118,6 +118,8 @@ pub struct MissileStat {
     pub reload_cycles: u32,
     pub hits: u32,
     pub missiles_per_cycle: u32,
+    /// Launchers at enrich time (= missiles per volley).
+    pub launchers: u32,
     pub dead: u32,
 }
 
