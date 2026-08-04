@@ -7,12 +7,36 @@ Local Tauri app for EVE Online incursion fleets: a site-timer overlay driven by 
 ### Overlay
 
 **Listener**:
-The fleet-chat character whose newest `Fleet_*.txt` drives the live site timer board.
-_Avoid_: character (when you mean the chatlog selector), pilot
+The EVE character whose fleet chatlog the overlay follows (newest matching `Fleet_*.txt`).
+_Avoid_: character (when meaning the log-selection rule), pilot (when meaning the configured follow target)
 
-**Site tag**:
-A single-character site label posted in fleet chat that starts a 20-minute timer row on the overlay.
-_Avoid_: site (when you mean the wallet payout site), tag alone
+**Site** (overlay):
+One tagged fleet-chat post tracked on the Board until Cleared.
+_Avoid_: entry, row, timer (as the entity), Site (analytics)
+
+**Tag**:
+The single character (`0-9` / `a-z`) that identifies an overlay Site in fleet chat.
+_Avoid_: code, label (when meaning the chat tag), site tag
+
+**Board**:
+The current set of visible overlay Sites for the active fleet log, plus status metadata.
+_Avoid_: list, state, snapshot (as the domain noun), EditionFocus
+
+**Ran**:
+A local mark that the overlay Site has been run; does not remove it from the Board.
+_Avoid_: completed, done, finished
+
+**Phase**:
+Where an overlay Site sits relative to expiry and Ran: `active` (not expired), `overdue` (expired, not Ran), or `ready` (expired and Ran).
+_Avoid_: status, state (when meaning this three-way)
+
+**Clearable**:
+Whether Clear is allowed for an overlay Site; true exactly when Phase is `ready`.
+_Avoid_: unlocked, enabled (as the domain fact)
+
+**Clear**:
+Remove a Clearable overlay Site from the Board (per-Site or bulk “Clear ready”).
+_Avoid_: dismiss, delete, archive
 
 ### Run analytics
 
@@ -26,7 +50,7 @@ _Avoid_: session, report (the computed view is not the run)
 
 **Site** (analytics):
 A qualifying Corporate Reward Payout row on the run timeline, with gap/break/duration fields from wallet timing.
-_Avoid_: site tag, payout (the raw journal line)
+_Avoid_: Site (overlay), Tag, payout (the raw journal line)
 
 **Break**:
 A gap above the configured threshold, excluded from timing averages.
@@ -38,7 +62,7 @@ _Avoid_: ToolsApp, analytics service, session manager
 
 **EditionFocus**:
 The always-returned RunDesk snapshot the UI renders after an operation (trays, catalog, scope, report, enrichment, diagnostics). The Tools shell’s public contract — not the nested report/enrichment field catalog.
-_Avoid_: analytics types, focus state, view model, board (overlay term)
+_Avoid_: analytics types, focus state, view model, Board (overlay term)
 
 **Tray**:
 A staging slot for pasted text before Analyze — Manifest or wallet journal (wallet may append in batches).
