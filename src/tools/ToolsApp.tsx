@@ -10,7 +10,7 @@ import type {
   RunSettings,
   SpaceBand,
 } from "../lib/analyticsTypes";
-import { avgCombatToPayoutForHour } from "../lib/hourlyAvgCombat";
+import { avgCombatToPayoutForHour, missileRatesForHour } from "../lib/hourlyAvgCombat";
 import { hasMissileActivity } from "../lib/missileActivity";
 import {
   deadCycles,
@@ -812,10 +812,17 @@ export function ToolsApp() {
                     <th className="px-2 py-1">Sites</th>
                     <th className="px-2 py-1">Avg site</th>
                     <th className="px-2 py-1">Avg combat→payout</th>
+                    <th className="px-2 py-1">Hit %</th>
+                    <th className="px-2 py-1">Miss %</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(focus?.report?.hourly ?? []).map((h) => (
+                  {(focus?.report?.hourly ?? []).map((h) => {
+                    const rates = missileRatesForHour(
+                      h.hour_start,
+                      focus?.enrichment?.sites ?? [],
+                    );
+                    return (
                     <tr key={h.hour_start} className="border-t border-border">
                       <td className="px-2 py-1">
                         {new Date(h.hour_start).toLocaleString()}
@@ -834,11 +841,18 @@ export function ToolsApp() {
                           ),
                         )}
                       </td>
+                      <td className="px-2 py-1">
+                        {formatPercent(rates.hitPct)}
+                      </td>
+                      <td className="px-2 py-1">
+                        {formatPercent(rates.missPct)}
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                   {!focus?.report?.hourly?.length && (
                     <tr>
-                      <td colSpan={6} className="px-2 py-6 text-center text-muted">
+                      <td colSpan={8} className="px-2 py-6 text-center text-muted">
                         No report yet — paste Manifest + wallet and Analyze
                       </td>
                     </tr>
