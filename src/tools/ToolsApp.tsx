@@ -12,6 +12,13 @@ import type {
 } from "../lib/analyticsTypes";
 import { avgCombatToPayoutForHour } from "../lib/hourlyAvgCombat";
 import { hasMissileActivity } from "../lib/missileActivity";
+import {
+  deadCycles,
+  formatPercent,
+  hitRate,
+  missRate,
+  sumMissileStats,
+} from "../lib/missileDerived";
 import { cn } from "../lib/utils";
 
 type ToolsSettings = {
@@ -309,6 +316,10 @@ export function ToolsApp() {
     (focus?.scope.kind === "overall" && (focus.catalog?.runs?.length ?? 0) > 0);
   const visibleMissiles =
     focus?.enrichment?.missiles?.filter(hasMissileActivity) ?? [];
+  const fleetMissileSum = useMemo(
+    () => sumMissileStats(focus?.enrichment?.missiles ?? []),
+    [focus?.enrichment?.missiles],
+  );
   const enrichmentByTime = useMemo(() => {
     const map = new Map<string, EnrichmentSite>();
     for (const s of focus?.enrichment?.sites ?? []) map.set(s.occurred_at, s);
@@ -806,8 +817,36 @@ export function ToolsApp() {
                     value={formatDuration(focus.enrichment.totals.avg_combat_to_payout_seconds)}
                   />
                   <Row
+                    label="Expended"
+                    value={formatCount(fleetMissileSum.expended)}
+                  />
+                  <Row
+                    label="Hits"
+                    value={formatCount(fleetMissileSum.hits)}
+                  />
+                  <Row
                     label="Dead missiles"
                     value={formatCount(focus.enrichment.totals.fleet_dead)}
+                  />
+                  <Row
+                    label="Dead cycles"
+                    value={formatCount(fleetMissileSum.dead_cycles)}
+                  />
+                  <Row
+                    label="Hit %"
+                    value={formatPercent(
+                      fleetMissileSum.expended === 0
+                        ? null
+                        : fleetMissileSum.hits / fleetMissileSum.expended,
+                    )}
+                  />
+                  <Row
+                    label="Miss %"
+                    value={formatPercent(
+                      fleetMissileSum.expended === 0
+                        ? null
+                        : fleetMissileSum.dead / fleetMissileSum.expended,
+                    )}
                   />
                   <p className="text-[10px] text-muted">
                     Incomplete magazines can undercount dead missiles.
@@ -899,7 +938,10 @@ export function ToolsApp() {
                       <th className="px-2 py-1">Reload cycles</th>
                       <th className="px-2 py-1">Hits</th>
                       <th className="px-2 py-1">Missiles/cycle</th>
-                      <th className="px-2 py-1">Dead</th>
+                      <th className="px-2 py-1">Dead cycles</th>
+                      <th className="px-2 py-1">Dead missiles</th>
+                      <th className="px-2 py-1">Hit %</th>
+                      <th className="px-2 py-1">Miss %</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -911,7 +953,10 @@ export function ToolsApp() {
                         <td className="px-2 py-1">
                           {formatCount(m.missiles_per_cycle)}
                         </td>
+                        <td className="px-2 py-1">{formatCount(deadCycles(m))}</td>
                         <td className="px-2 py-1">{formatCount(m.dead)}</td>
+                        <td className="px-2 py-1">{formatPercent(hitRate(m))}</td>
+                        <td className="px-2 py-1">{formatPercent(missRate(m))}</td>
                       </tr>
                     ))}
                   </tbody>
