@@ -15,7 +15,7 @@ Today missile stats exist only at run level (`MissileStat` on `EnrichmentSnapsho
 
 - Prefer **dead cycles** in the Listeners table while still showing **dead missiles**.
 - Show **hit %** and **miss %** (vs expended) on Listeners, enrichment Summary, and site drill-down layers.
-- Enrichment Summary: **Expended → Hits → Dead missiles → Dead cycles → Hit % / Miss %**.
+- Enrichment Summary: **Expended → Hits → Dead missiles → Dead volleys → Hit % / Miss %**.
 - Per-site (run scope): click site → site totals → per-listener missile table.
 - Persist per-site listener missile stats in `enrichment_json` (Re-enrich for old runs).
 
@@ -41,7 +41,7 @@ Today missile stats exist only at run level (`MissileStat` on `EnrichmentSnapsho
 | Persistence | `EnrichmentSite.missiles: MissileStat[]`; missing field → stale → Re-enrich |
 | Drill-down UX | Push levels with Back (site list → site totals → listeners) |
 | Aggregate scopes | Timing table only; no site missile click-through |
-| Fleet dead cycles | Sum of per-listener `dead_cycles` (not floor of fleet dead) |
+| Fleet dead volleys | Sum of per-listener `dead_volleys` (not floor of fleet dead) |
 | Approach | Schema + shared derived helpers; UI stays thin |
 
 ## Formulas
@@ -103,14 +103,14 @@ After combat timing rows:
 | Expended | Σ listener expended |
 | Hits | Σ listener hits |
 | Dead missiles | `totals.fleet_dead` |
-| Dead cycles | Σ per-listener dead_cycles |
-| Hit % / Miss % | Hit % = fleet dead / fleet expended; Miss % = fleet hits / fleet expended; `—` if expended = 0 |
+| Dead volleys | Σ per-listener dead_volleys |
+| Hit % / Miss % | Hit % = fleet hits / fleet expended; Miss % = fleet dead / fleet expended; `—` if expended = 0 |
 
 Keep the incomplete-magazine undercount note.
 
 ### Listeners panel
 
-Columns: Listener | Reload cycles | Hits | Missiles/cycle | **Dead cycles** | **Dead missiles** | **Hit %** | **Miss %**.
+Columns: Listener | Reload cycles | Hits | Missiles/cycle | **Dead volleys** | **Dead missiles** | **Hit %** | **Miss %**.
 
 Filter with existing `hasMissileActivity`. Format percentages to **one decimal** (e.g. `12.3%`); undefined → `—`.
 
@@ -119,10 +119,10 @@ Filter with existing `hasMissileActivity`. Format percentages to **one decimal**
 | Level | Content |
 |-------|---------|
 | 0 | Existing site timing table; rows clickable when `scope.kind === "run"`, enrichment present, and the site’s `missiles` is non-empty |
-| 1 | Site totals: Reload cycles, Hits, Dead cycles, Dead missiles, Hit %, Miss %; Back → 0; open listeners → 2 |
+| 1 | Site totals: Reload cycles, Hits, Dead volleys, Dead missiles, Hit %, Miss %; Back → 0; open listeners → 2 |
 | 2 | Per-listener table for that site (same columns as Listeners); Back → 1 |
 
-**Level 1 aggregation:** same rule as fleet Summary — sum base counts (`reload_cycles`, `hits`, `dead`, per-listener `expended` / `dead_cycles`), then derive Hit % = summed dead / expended and Miss % = summed hits / expended (do not average per-listener percentages).
+**Level 1 aggregation:** same rule as fleet Summary — sum base counts (`reload_cycles`, `hits`, `dead`, per-listener `expended` / `dead_volleys`), then derive Hit % = summed hits / expended and Miss % = summed dead / expended (do not average per-listener percentages).
 
 Sites with empty `missiles` (breaks and unalignable first sites) are **not clickable** for missile layers; they remain visible in the level-0 timing table only.
 
@@ -142,7 +142,7 @@ Sites with empty `missiles` (breaks and unalignable first sites) are **not click
 
 1. **Rust enrich:** hits/reloads inside vs outside a site gap land in the correct `EnrichmentSite.missiles`.
 2. **Rust enrich:** break site has empty `missiles`; run-level still counts break-gap events.
-3. **TS helpers:** expended, dead_cycles, hit_pct, miss_pct (including expended = 0).
+3. **TS helpers:** expended, dead_volleys, hit_pct, miss_pct (including expended = 0).
 4. Optional: percentage formatting helper.
 
 ## Success
