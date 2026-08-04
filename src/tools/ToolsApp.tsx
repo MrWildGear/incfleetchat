@@ -53,6 +53,10 @@ export function ToolsApp() {
   const [walletPaste, setWalletPaste] = useState("");
   const [walletBuffer, setWalletBuffer] = useState("");
   const [showDrilldown, setShowDrilldown] = useState(false);
+  const [siteDrill, setSiteDrill] = useState<null | {
+    level: 1 | 2;
+    occurredAt: string;
+  }>(null);
   const [showListeners, setShowListeners] = useState(false);
   const [showEnrichLog, setShowEnrichLog] = useState(false);
   const [gamelogsPath, setGamelogsPath] = useState("");
@@ -217,6 +221,7 @@ export function ToolsApp() {
       setScopeBusy(true);
       const f = await invoke<EditionFocus>("run_desk_focus", { scope });
       applyFocus(f);
+      setSiteDrill(null);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -325,6 +330,17 @@ export function ToolsApp() {
     for (const s of focus?.enrichment?.sites ?? []) map.set(s.occurred_at, s);
     return map;
   }, [focus?.enrichment]);
+  const siteDrillEnrich = siteDrill
+    ? focus?.enrichment?.sites.find(
+        (x) => x.occurred_at === siteDrill.occurredAt,
+      )
+    : undefined;
+  const siteDrillSum = useMemo(
+    () => sumMissileStats(siteDrillEnrich?.missiles ?? []),
+    [siteDrillEnrich?.missiles],
+  );
+  const siteDrillMissiles =
+    siteDrillEnrich?.missiles?.filter(hasMissileActivity) ?? [];
   /** Enrichment + focus diagnostics for the Enrich log drill-down (not Summary). */
   const topDiagnostics = useMemo(() => {
     const generic = focus?.diagnostics ?? [];
@@ -670,7 +686,12 @@ export function ToolsApp() {
               <button
                 type="button"
                 disabled={!focus?.report?.sites?.length}
-                onClick={() => setShowDrilldown((v) => !v)}
+                onClick={() =>
+                  setShowDrilldown((v) => {
+                    if (v) setSiteDrill(null);
+                    return !v;
+                  })
+                }
                 className={cn(
                   "rounded border px-2 py-1 text-xs",
                   focus?.report?.sites?.length
@@ -971,56 +992,200 @@ export function ToolsApp() {
             >
               <div className="sticky top-0 z-20 flex shrink-0 items-center justify-between border-b border-border bg-surface-raised px-3 py-2">
                 <h3 className="text-xs font-semibold">
-                  Per-site detail ({focus.report.sites.length})
+                  {siteDrill == null
+                    ? `Per-site detail (${focus.report.sites.length})`
+                    : siteDrill.level === 1
+                      ? `Site totals · ${new Date(siteDrill.occurredAt).toLocaleString()}`
+                      : `Site listeners · ${new Date(siteDrill.occurredAt).toLocaleString()}`}
                 </h3>
-                <button
-                  type="button"
-                  onClick={() => setShowDrilldown(false)}
-                  className="rounded border border-border px-2 py-1 text-xs hover:border-accent/40 hover:text-accent"
-                >
-                  Close
-                </button>
+                <div className="flex items-center gap-2">
+                  {siteDrill?.level === 1 ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setSiteDrill(null)}
+                        className="rounded border border-border px-2 py-1 text-xs hover:border-accent/40 hover:text-accent"
+                      >
+                        Back
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSiteDrill({ ...siteDrill, level: 2 })
+                        }
+                        className="rounded border border-border px-2 py-1 text-xs hover:border-accent/40 hover:text-accent"
+                      >
+                        Listeners
+                      </button>
+                    </>
+                  ) : null}
+                  {siteDrill?.level === 2 ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSiteDrill({ ...siteDrill, level: 1 })
+                      }
+                      className="rounded border border-border px-2 py-1 text-xs hover:border-accent/40 hover:text-accent"
+                    >
+                      Back
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDrilldown(false);
+                      setSiteDrill(null);
+                    }}
+                    className="rounded border border-border px-2 py-1 text-xs hover:border-accent/40 hover:text-accent"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
               <div className="min-h-0 flex-1 overflow-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="sticky top-0 z-10 bg-surface text-muted">
-                    <tr>
-                      <th className="px-2 py-1">Time</th>
-                      <th className="px-2 py-1">Duration</th>
-                      <th className="px-2 py-1">Break?</th>
-                      <th className="px-2 py-1">ISK</th>
-                      <th className="px-2 py-1">LP</th>
-                      <th className="px-2 py-1">Approach</th>
-                      <th className="px-2 py-1">Combat→payout</th>
-                      <th className="px-2 py-1">Source</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {focus.report.sites.map((s, i) => {
-                      const e = enrichmentByTime.get(s.occurred_at);
-                      return (
-                        <tr key={i} className="border-t border-border">
+                {siteDrill == null ? (
+                  <table className="w-full text-left text-xs">
+                    <thead className="sticky top-0 z-10 bg-surface text-muted">
+                      <tr>
+                        <th className="px-2 py-1">Time</th>
+                        <th className="px-2 py-1">Duration</th>
+                        <th className="px-2 py-1">Break?</th>
+                        <th className="px-2 py-1">ISK</th>
+                        <th className="px-2 py-1">LP</th>
+                        <th className="px-2 py-1">Approach</th>
+                        <th className="px-2 py-1">Combat→payout</th>
+                        <th className="px-2 py-1">Source</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {focus.report.sites.map((s, i) => {
+                        const e = enrichmentByTime.get(s.occurred_at);
+                        const canDrill =
+                          focus.scope.kind === "run" &&
+                          !!e &&
+                          e.missiles.some(hasMissileActivity);
+                        return (
+                          <tr
+                            key={i}
+                            className="border-t border-border"
+                            onClick={
+                              canDrill
+                                ? () =>
+                                    setSiteDrill({
+                                      level: 1,
+                                      occurredAt: s.occurred_at,
+                                    })
+                                : undefined
+                            }
+                            style={canDrill ? { cursor: "pointer" } : undefined}
+                          >
+                            <td className="px-2 py-1">
+                              {new Date(s.occurred_at).toLocaleString()}
+                            </td>
+                            <td className="px-2 py-1">
+                              {formatDuration(s.duration_seconds)}
+                            </td>
+                            <td className="px-2 py-1">
+                              {s.is_break ? "yes" : ""}
+                            </td>
+                            <td className="px-2 py-1">
+                              {formatIskMoney(s.amount_isk)}
+                            </td>
+                            <td className="px-2 py-1">{formatLp(s.fleet_lp)}</td>
+                            <td className="px-2 py-1">
+                              {e ? formatDuration(e.approach_seconds) : "—"}
+                            </td>
+                            <td className="px-2 py-1">
+                              {e
+                                ? formatDuration(e.combat_to_payout_seconds)
+                                : "—"}
+                            </td>
+                            <td className="px-2 py-1">{e ? e.source : "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : null}
+                {siteDrill?.level === 1 ? (
+                  <div className="space-y-1 p-3 text-xs">
+                    <Row
+                      label="Reload cycles"
+                      value={formatCount(siteDrillSum.reload_cycles)}
+                    />
+                    <Row
+                      label="Hits"
+                      value={formatCount(siteDrillSum.hits)}
+                    />
+                    <Row
+                      label="Dead cycles"
+                      value={formatCount(siteDrillSum.dead_cycles)}
+                    />
+                    <Row
+                      label="Dead missiles"
+                      value={formatCount(siteDrillSum.dead)}
+                    />
+                    <Row
+                      label="Hit %"
+                      value={formatPercent(
+                        siteDrillSum.expended === 0
+                          ? null
+                          : siteDrillSum.hits / siteDrillSum.expended,
+                      )}
+                    />
+                    <Row
+                      label="Miss %"
+                      value={formatPercent(
+                        siteDrillSum.expended === 0
+                          ? null
+                          : siteDrillSum.dead / siteDrillSum.expended,
+                      )}
+                    />
+                  </div>
+                ) : null}
+                {siteDrill?.level === 2 ? (
+                  <table className="w-full text-left text-xs">
+                    <thead className="sticky top-0 z-10 bg-surface text-muted">
+                      <tr>
+                        <th className="px-2 py-1">Listener</th>
+                        <th className="px-2 py-1">Reload cycles</th>
+                        <th className="px-2 py-1">Hits</th>
+                        <th className="px-2 py-1">Missiles/cycle</th>
+                        <th className="px-2 py-1">Dead cycles</th>
+                        <th className="px-2 py-1">Dead missiles</th>
+                        <th className="px-2 py-1">Hit %</th>
+                        <th className="px-2 py-1">Miss %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {siteDrillMissiles.map((m) => (
+                        <tr
+                          key={m.listener}
+                          className="border-t border-border"
+                        >
+                          <td className="px-2 py-1">{m.listener}</td>
                           <td className="px-2 py-1">
-                            {new Date(s.occurred_at).toLocaleString()}
+                            {formatCount(m.reload_cycles)}
+                          </td>
+                          <td className="px-2 py-1">{formatCount(m.hits)}</td>
+                          <td className="px-2 py-1">
+                            {formatCount(m.missiles_per_cycle)}
                           </td>
                           <td className="px-2 py-1">
-                            {formatDuration(s.duration_seconds)}
+                            {formatCount(deadCycles(m))}
                           </td>
-                          <td className="px-2 py-1">{s.is_break ? "yes" : ""}</td>
-                          <td className="px-2 py-1">{formatIskMoney(s.amount_isk)}</td>
-                          <td className="px-2 py-1">{formatLp(s.fleet_lp)}</td>
+                          <td className="px-2 py-1">{formatCount(m.dead)}</td>
                           <td className="px-2 py-1">
-                            {e ? formatDuration(e.approach_seconds) : "—"}
+                            {formatPercent(hitRate(m))}
                           </td>
                           <td className="px-2 py-1">
-                            {e ? formatDuration(e.combat_to_payout_seconds) : "—"}
+                            {formatPercent(missRate(m))}
                           </td>
-                          <td className="px-2 py-1">{e ? e.source : "—"}</td>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : null}
               </div>
             </div>
           ) : null}
