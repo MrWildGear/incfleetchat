@@ -341,6 +341,12 @@ export function ToolsApp() {
   );
   const siteDrillMissiles =
     siteDrillEnrich?.missiles?.filter(hasMissileActivity) ?? [];
+  const siteDrillCycleSize = (() => {
+    const cycles = siteDrillMissiles.map((m) => m.missiles_per_cycle);
+    if (cycles.length === 0) return null;
+    const first = cycles[0];
+    return cycles.every((c) => c === first) ? first : null;
+  })();
   /** Enrichment + focus diagnostics for the Enrich log drill-down (not Summary). */
   const topDiagnostics = useMemo(() => {
     const generic = focus?.diagnostics ?? [];
@@ -1108,40 +1114,56 @@ export function ToolsApp() {
                   </table>
                 ) : null}
                 {siteDrill?.level === 1 ? (
-                  <div className="space-y-1 p-3 text-xs">
-                    <Row
-                      label="Reload cycles"
-                      value={formatCount(siteDrillSum.reload_cycles)}
-                    />
-                    <Row
-                      label="Hits"
-                      value={formatCount(siteDrillSum.hits)}
-                    />
-                    <Row
-                      label="Dead cycles"
-                      value={formatCount(siteDrillSum.dead_cycles)}
-                    />
-                    <Row
-                      label="Dead missiles"
-                      value={formatCount(siteDrillSum.dead)}
-                    />
-                    <Row
-                      label="Hit %"
-                      value={formatPercent(
-                        siteDrillSum.expended === 0
-                          ? null
-                          : siteDrillSum.dead / siteDrillSum.expended,
-                      )}
-                    />
-                    <Row
-                      label="Miss %"
-                      value={formatPercent(
-                        siteDrillSum.expended === 0
-                          ? null
-                          : siteDrillSum.hits / siteDrillSum.expended,
-                      )}
-                    />
-                  </div>
+                  <table className="w-full text-left text-xs">
+                    <thead className="sticky top-0 z-10 bg-surface text-muted">
+                      <tr>
+                        <th className="px-2 py-1">Listener</th>
+                        <th className="px-2 py-1">Reload cycles</th>
+                        <th className="px-2 py-1">Hits</th>
+                        <th className="px-2 py-1">Missiles/cycle</th>
+                        <th className="px-2 py-1">Dead cycles</th>
+                        <th className="px-2 py-1">Dead missiles</th>
+                        <th className="px-2 py-1">Hit %</th>
+                        <th className="px-2 py-1">Miss %</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-t border-border font-medium">
+                        <td className="px-2 py-1">Total</td>
+                        <td className="px-2 py-1">
+                          {formatCount(siteDrillSum.reload_cycles)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {formatCount(siteDrillSum.hits)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {siteDrillCycleSize == null
+                            ? "—"
+                            : formatCount(siteDrillCycleSize)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {formatCount(siteDrillSum.dead_cycles)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {formatCount(siteDrillSum.dead)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {formatPercent(
+                            siteDrillSum.expended === 0
+                              ? null
+                              : siteDrillSum.dead / siteDrillSum.expended,
+                          )}
+                        </td>
+                        <td className="px-2 py-1">
+                          {formatPercent(
+                            siteDrillSum.expended === 0
+                              ? null
+                              : siteDrillSum.hits / siteDrillSum.expended,
+                          )}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 ) : null}
                 {siteDrill?.level === 2 ? (
                   <table className="w-full text-left text-xs">
@@ -1184,6 +1206,42 @@ export function ToolsApp() {
                         </tr>
                       ))}
                     </tbody>
+                    <tfoot>
+                      <tr className="sticky bottom-0 border-t border-border bg-surface-raised font-medium">
+                        <td className="px-2 py-1">Total</td>
+                        <td className="px-2 py-1">
+                          {formatCount(siteDrillSum.reload_cycles)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {formatCount(siteDrillSum.hits)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {siteDrillCycleSize == null
+                            ? "—"
+                            : formatCount(siteDrillCycleSize)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {formatCount(siteDrillSum.dead_cycles)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {formatCount(siteDrillSum.dead)}
+                        </td>
+                        <td className="px-2 py-1">
+                          {formatPercent(
+                            siteDrillSum.expended === 0
+                              ? null
+                              : siteDrillSum.dead / siteDrillSum.expended,
+                          )}
+                        </td>
+                        <td className="px-2 py-1">
+                          {formatPercent(
+                            siteDrillSum.expended === 0
+                              ? null
+                              : siteDrillSum.hits / siteDrillSum.expended,
+                          )}
+                        </td>
+                      </tr>
+                    </tfoot>
                   </table>
                 ) : null}
               </div>
