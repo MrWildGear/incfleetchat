@@ -13,6 +13,7 @@ import type {
 import { avgCombatToPayoutForHour, missileRatesForHour } from "../lib/hourlyAvgCombat";
 import { hasMissileActivity } from "../lib/missileActivity";
 import {
+  deadMissiles,
   deadVolleys,
   formatPercent,
   hitRate,
@@ -361,9 +362,9 @@ export function ToolsApp() {
       const e = enrichmentByTime.get(s.occurred_at);
       const siteSum = sumMissileStats(e?.missiles ?? []);
       const hitPct =
-        siteSum.expended === 0 ? null : siteSum.dead / siteSum.expended;
-      const missPct =
         siteSum.expended === 0 ? null : siteSum.hits / siteSum.expended;
+      const missPct =
+        siteSum.expended === 0 ? null : siteSum.dead_volleys / siteSum.expended;
       return { s, e, siteSum, hitPct, missPct, index };
     });
     const { key, dir } = siteSort;
@@ -419,12 +420,6 @@ export function ToolsApp() {
   );
   const siteDrillMissiles =
     siteDrillEnrich?.missiles?.filter(hasMissileActivity) ?? [];
-  const siteDrillCycleSize = (() => {
-    const cycles = siteDrillMissiles.map((m) => m.missiles_per_cycle);
-    if (cycles.length === 0) return null;
-    const first = cycles[0];
-    return cycles.every((c) => c === first) ? first : null;
-  })();
   /** Enrichment + focus diagnostics for the Enrich log drill-down (not Summary). */
   const topDiagnostics = useMemo(() => {
     const generic = focus?.diagnostics ?? [];
@@ -945,10 +940,10 @@ export function ToolsApp() {
                   />
                   <Row
                     label="Dead missiles"
-                    value={formatCount(focus.enrichment.totals.fleet_dead)}
+                    value={formatCount(fleetMissileSum.dead)}
                   />
                   <Row
-                    label="Dead volleys"
+                    label="Dead volleys/unused"
                     value={formatCount(fleetMissileSum.dead_volleys)}
                   />
                   <Row
@@ -956,7 +951,7 @@ export function ToolsApp() {
                     value={formatPercent(
                       fleetMissileSum.expended === 0
                         ? null
-                        : fleetMissileSum.dead / fleetMissileSum.expended,
+                        : fleetMissileSum.hits / fleetMissileSum.expended,
                     )}
                   />
                   <Row
@@ -964,7 +959,7 @@ export function ToolsApp() {
                     value={formatPercent(
                       fleetMissileSum.expended === 0
                         ? null
-                        : fleetMissileSum.hits / fleetMissileSum.expended,
+                        : fleetMissileSum.dead_volleys / fleetMissileSum.expended,
                     )}
                   />
                   <p className="text-[10px] text-muted">
@@ -1056,8 +1051,7 @@ export function ToolsApp() {
                       <th className="px-2 py-1">Listener</th>
                       <th className="px-2 py-1">Reload cycles</th>
                       <th className="px-2 py-1">Hits</th>
-                      <th className="px-2 py-1">Missiles/cycle</th>
-                      <th className="px-2 py-1">Dead volleys</th>
+                      <th className="px-2 py-1">Dead volleys/unused</th>
                       <th className="px-2 py-1">Dead missiles</th>
                       <th className="px-2 py-1">Hit %</th>
                       <th className="px-2 py-1">Miss %</th>
@@ -1069,11 +1063,8 @@ export function ToolsApp() {
                         <td className="px-2 py-1">{m.listener}</td>
                         <td className="px-2 py-1">{formatCount(m.reload_cycles)}</td>
                         <td className="px-2 py-1">{formatCount(m.hits)}</td>
-                        <td className="px-2 py-1">
-                          {formatCount(m.missiles_per_cycle)}
-                        </td>
                         <td className="px-2 py-1">{formatCount(deadVolleys(m))}</td>
-                        <td className="px-2 py-1">{formatCount(m.dead)}</td>
+                        <td className="px-2 py-1">{formatCount(deadMissiles(m))}</td>
                         <td className="px-2 py-1">{formatPercent(hitRate(m))}</td>
                         <td className="px-2 py-1">{formatPercent(missRate(m))}</td>
                       </tr>
@@ -1244,8 +1235,7 @@ export function ToolsApp() {
                         <th className="px-2 py-1">Listener</th>
                         <th className="px-2 py-1">Reload cycles</th>
                         <th className="px-2 py-1">Hits</th>
-                        <th className="px-2 py-1">Missiles/cycle</th>
-                        <th className="px-2 py-1">Dead volleys</th>
+                        <th className="px-2 py-1">Dead volleys/unused</th>
                         <th className="px-2 py-1">Dead missiles</th>
                         <th className="px-2 py-1">Hit %</th>
                         <th className="px-2 py-1">Miss %</th>
@@ -1261,11 +1251,6 @@ export function ToolsApp() {
                           {formatCount(siteDrillSum.hits)}
                         </td>
                         <td className="px-2 py-1">
-                          {siteDrillCycleSize == null
-                            ? "—"
-                            : formatCount(siteDrillCycleSize)}
-                        </td>
-                        <td className="px-2 py-1">
                           {formatCount(siteDrillSum.dead_volleys)}
                         </td>
                         <td className="px-2 py-1">
@@ -1275,14 +1260,14 @@ export function ToolsApp() {
                           {formatPercent(
                             siteDrillSum.expended === 0
                               ? null
-                              : siteDrillSum.dead / siteDrillSum.expended,
+                              : siteDrillSum.hits / siteDrillSum.expended,
                           )}
                         </td>
                         <td className="px-2 py-1">
                           {formatPercent(
                             siteDrillSum.expended === 0
                               ? null
-                              : siteDrillSum.hits / siteDrillSum.expended,
+                              : siteDrillSum.dead_volleys / siteDrillSum.expended,
                           )}
                         </td>
                       </tr>
@@ -1296,8 +1281,7 @@ export function ToolsApp() {
                         <th className="px-2 py-1">Listener</th>
                         <th className="px-2 py-1">Reload cycles</th>
                         <th className="px-2 py-1">Hits</th>
-                        <th className="px-2 py-1">Missiles/cycle</th>
-                        <th className="px-2 py-1">Dead volleys</th>
+                        <th className="px-2 py-1">Dead volleys/unused</th>
                         <th className="px-2 py-1">Dead missiles</th>
                         <th className="px-2 py-1">Hit %</th>
                         <th className="px-2 py-1">Miss %</th>
@@ -1315,12 +1299,11 @@ export function ToolsApp() {
                           </td>
                           <td className="px-2 py-1">{formatCount(m.hits)}</td>
                           <td className="px-2 py-1">
-                            {formatCount(m.missiles_per_cycle)}
-                          </td>
-                          <td className="px-2 py-1">
                             {formatCount(deadVolleys(m))}
                           </td>
-                          <td className="px-2 py-1">{formatCount(m.dead)}</td>
+                          <td className="px-2 py-1">
+                            {formatCount(deadMissiles(m))}
+                          </td>
                           <td className="px-2 py-1">
                             {formatPercent(hitRate(m))}
                           </td>
@@ -1340,11 +1323,6 @@ export function ToolsApp() {
                           {formatCount(siteDrillSum.hits)}
                         </td>
                         <td className="px-2 py-1">
-                          {siteDrillCycleSize == null
-                            ? "—"
-                            : formatCount(siteDrillCycleSize)}
-                        </td>
-                        <td className="px-2 py-1">
                           {formatCount(siteDrillSum.dead_volleys)}
                         </td>
                         <td className="px-2 py-1">
@@ -1354,14 +1332,14 @@ export function ToolsApp() {
                           {formatPercent(
                             siteDrillSum.expended === 0
                               ? null
-                              : siteDrillSum.dead / siteDrillSum.expended,
+                              : siteDrillSum.hits / siteDrillSum.expended,
                           )}
                         </td>
                         <td className="px-2 py-1">
                           {formatPercent(
                             siteDrillSum.expended === 0
                               ? null
-                              : siteDrillSum.hits / siteDrillSum.expended,
+                              : siteDrillSum.dead_volleys / siteDrillSum.expended,
                           )}
                         </td>
                       </tr>

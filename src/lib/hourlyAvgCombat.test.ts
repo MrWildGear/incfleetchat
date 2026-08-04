@@ -78,9 +78,11 @@ describe("missileRatesForHour", () => {
   });
 
   it("sums missiles across sites in the hour then derives Hit/Miss %", () => {
-    // Site A: expended 312, hits 100, dead 212
-    // Site B: expended 156, hits 56, dead 100
-    // Fleet: expended 468, hits 156, dead 312 → hit 312/468, miss 156/468
+    // expended = reload × ammo_per_launcher
+    // Site A: expended 52, hits 30, dead_volleys 22
+    // Site B: expended 26, hits 10, dead_volleys 16
+    // Fleet: expended 78, hits 40, dead_volleys 38
+    // hit% = hits/expended; miss% = dead_volleys/expended
     expect(
       missileRatesForHour(hour, [
         {
@@ -88,9 +90,10 @@ describe("missileRatesForHour", () => {
           missiles: [
             {
               reload_cycles: 2,
-              hits: 100,
+              hits: 30,
               missiles_per_cycle: 156,
-              dead: 212,
+              launchers: 6,
+              dead: 0,
             },
           ],
         },
@@ -99,9 +102,10 @@ describe("missileRatesForHour", () => {
           missiles: [
             {
               reload_cycles: 1,
-              hits: 56,
+              hits: 10,
               missiles_per_cycle: 156,
-              dead: 100,
+              launchers: 6,
+              dead: 0,
             },
           ],
         },
@@ -112,14 +116,15 @@ describe("missileRatesForHour", () => {
               reload_cycles: 9,
               hits: 1,
               missiles_per_cycle: 156,
-              dead: 1403,
+              launchers: 6,
+              dead: 0,
             },
           ],
         },
       ]),
     ).toEqual({
-      hitPct: 312 / 468,
-      missPct: 156 / 468,
+      hitPct: 40 / 78,
+      missPct: 38 / 78,
     });
   });
 });

@@ -164,8 +164,14 @@ fn missile_stats(
                 .iter()
                 .filter(|e| e.kind == GamelogEventKind::CombatHit)
                 .count() as u32;
-            let expended = reload_cycles.saturating_mul(missiles_per_cycle);
-            let dead = expended.saturating_sub(hits);
+            let ammo_per_launcher = if launchers == 0 {
+                0
+            } else {
+                missiles_per_cycle / launchers
+            };
+            let expended = reload_cycles.saturating_mul(ammo_per_launcher);
+            let dead_volleys = expended.saturating_sub(hits);
+            let dead = dead_volleys.saturating_mul(launchers);
             MissileStat {
                 listener: l.listener.clone(),
                 reload_cycles,
@@ -196,8 +202,14 @@ fn missile_stats_in_gap(
                 .iter()
                 .filter(|e| e.kind == GamelogEventKind::CombatHit)
                 .count() as u32;
-            let expended = reload_cycles.saturating_mul(missiles_per_cycle);
-            let dead = expended.saturating_sub(hits);
+            let ammo_per_launcher = if launchers == 0 {
+                0
+            } else {
+                missiles_per_cycle / launchers
+            };
+            let expended = reload_cycles.saturating_mul(ammo_per_launcher);
+            let dead_volleys = expended.saturating_sub(hits);
+            let dead = dead_volleys.saturating_mul(launchers);
             MissileStat {
                 listener: l.listener.clone(),
                 reload_cycles,
@@ -578,8 +590,38 @@ mod tests {
         assert_eq!(m.reload_cycles, 2);
         assert_eq!(m.hits, 100);
         assert_eq!(m.missiles_per_cycle, 156);
-        assert_eq!(m.dead, 212);
-        assert_eq!(snap.totals.fleet_dead, 212);
+        // expended = 2×26 = 52; dead_volleys = 0; dead = 0×6 = 0
+        assert_eq!(m.dead, 0);
+        assert_eq!(snap.totals.fleet_dead, 0);
+    }
+
+    #[test]
+    fn dead_missiles_is_dead_volleys_times_launchers() {
+        let listener = listener_log(
+            "Gunner",
+            vec![
+                ev(20, 1, 0, GamelogEventKind::Reload),
+                ev(20, 5, 0, GamelogEventKind::Reload),
+            ]
+            .into_iter()
+            .chain((0..35).map(|i| ev(20, 2, i % 60, GamelogEventKind::CombatHit)))
+            .collect(),
+        );
+        let snap = enrich_run(
+            &[listener],
+            &[ts(20, 8, 0)],
+            &[None],
+            25,
+            Some(ts(20, 0, 0)),
+            156,
+            6,
+            None,
+            None,
+        );
+        let m = &snap.missiles[0];
+        // dead_volleys = 52 − 35 = 17; dead = 17 × 6 = 102
+        assert_eq!(m.dead, 102);
+        assert_eq!(snap.totals.fleet_dead, 102);
     }
 
     #[test]
@@ -877,7 +919,8 @@ mod tests {
             .unwrap();
         assert_eq!(s1.reload_cycles, 1);
         assert_eq!(s1.hits, 50);
-        assert_eq!(s1.dead, 156 - 50);
+        // expended = 1 × (156/6) = 26; dead = max(0, 26 − 50) = 0
+        assert_eq!(s1.dead, 0);
     }
 
     #[test]

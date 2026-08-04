@@ -43,6 +43,7 @@ export function missileRatesForHour(
       reload_cycles: number;
       hits: number;
       missiles_per_cycle: number;
+      launchers: number;
       dead: number;
     }[];
   }[],
@@ -50,15 +51,18 @@ export function missileRatesForHour(
   const hourMs = utcHourFloorMs(hourStartIso);
   let expended = 0;
   let hits = 0;
-  let dead = 0;
+  let deadVolleys = 0;
   for (const s of sites) {
     if (utcHourFloorMs(s.occurred_at) !== hourMs) continue;
     for (const m of s.missiles) {
-      expended += m.reload_cycles * m.missiles_per_cycle;
+      const ammoPerLauncher =
+        m.launchers === 0 ? 0 : Math.floor(m.missiles_per_cycle / m.launchers);
+      const rowExpended = m.reload_cycles * ammoPerLauncher;
+      expended += rowExpended;
       hits += m.hits;
-      dead += m.dead;
+      deadVolleys += Math.max(0, rowExpended - m.hits);
     }
   }
   if (expended === 0) return { hitPct: null, missPct: null };
-  return { hitPct: dead / expended, missPct: hits / expended };
+  return { hitPct: hits / expended, missPct: deadVolleys / expended };
 }
