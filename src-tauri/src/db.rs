@@ -160,6 +160,7 @@ impl Db {
         self.ensure_column("settings", "tracking_pip_enabled", "INTEGER NOT NULL DEFAULT 1")
             .await?;
         self.ensure_column("analytics_runs", "enrichment_json", "TEXT").await?;
+        self.ensure_column("analytics_runs", "fleet_log_id", "TEXT").await?;
 
         Ok(())
     }
@@ -248,6 +249,7 @@ impl Db {
         wallet_text: &str,
         manifest_text: &str,
         report: &AnalyticsReport,
+        fleet_log_id: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         let settings_json = serde_json::to_string(settings).unwrap_or_else(|_| "{}".into());
         let report_json = serde_json::to_string(report).unwrap_or_else(|_| "{}".into());
@@ -255,8 +257,8 @@ impl Db {
             r#"
             INSERT INTO analytics_runs (
                 run_id, constellation, saved_at, settings_json, wallet_text, manifest_text,
-                report_json, site_count, liquid_isk
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                report_json, site_count, liquid_isk, fleet_log_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(run_id)
@@ -268,6 +270,7 @@ impl Db {
         .bind(report_json)
         .bind(report.session.sites_ran as i64)
         .bind(report.session.fleet_liquid_isk)
+        .bind(fleet_log_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -581,17 +584,18 @@ impl Db {
     pub async fn load_run_for_enrich(
         &self,
         run_id: &str,
-    ) -> Result<Option<(RunSettings, AnalyticsReport, String)>, sqlx::Error> {
-        let row: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT settings_json, report_json, wallet_text FROM analytics_runs WHERE run_id = ?",
+    ) -> Result<Option<(RunSettings, AnalyticsReport, String, Option<String>)>, sqlx::Error> {
+        let row: Option<(String, String, String, Option<String>)> = sqlx::query_as(
+            "SELECT settings_json, report_json, wallet_text, fleet_log_id \
+             FROM analytics_runs WHERE run_id = ?",
         )
         .bind(run_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.and_then(|(settings_json, report_json, wallet_text)| {
+        Ok(row.and_then(|(settings_json, report_json, wallet_text, fleet_log_id)| {
             let settings: RunSettings = serde_json::from_str(&settings_json).ok()?;
             let report: AnalyticsReport = serde_json::from_str(&report_json).ok()?;
-            Some((settings, report, wallet_text))
+            Some((settings, report, wallet_text, fleet_log_id))
         }))
     }
 
@@ -828,7 +832,7 @@ mod tests {
         let settings = RunSettings::default();
         let report = build_report(&[], &settings);
         db.upsert_spawn("4MY-AB", None).await.unwrap();
-        db.save_run("run-1", "4MY-AB", &settings, "wallet", "manifest", &report)
+        db.save_run("run-1", "4MY-AB", &settings, "wallet", "manifest", &report, None)
             .await
             .unwrap();
 
@@ -851,6 +855,7 @@ mod tests {
                 is_break: false,
                 source: EnrichmentSource::Fc,
                 missiles: vec![],
+                site_kind: None,
             }],
             missiles: vec![MissileStat {
                 listener: "FC Pilot".into(),
@@ -875,7 +880,7 @@ mod tests {
         };
         assert_eq!(loaded, snapshot);
 
-        let (loaded_settings, loaded_report, wallet_text) =
+        let (loaded_settings, loaded_report, wallet_text, _fleet_log_id) =
             db.load_run_for_enrich("run-1").await.unwrap().unwrap();
         assert_eq!(loaded_settings.fleet_size, settings.fleet_size);
         assert_eq!(loaded_report.session.sites_ran, 0);
@@ -889,10 +894,10 @@ mod tests {
         let settings = RunSettings::default();
         let report = build_report(&[], &settings);
         db.upsert_spawn("4MY-AB", None).await.unwrap();
-        db.save_run("run-missing", "4MY-AB", &settings, "wallet", "manifest", &report)
+        db.save_run("run-missing", "4MY-AB", &settings, "wallet", "manifest", &report, None)
             .await
             .unwrap();
-        db.save_run("run-stale", "4MY-AB", &settings, "wallet", "manifest", &report)
+        db.save_run("run-stale", "4MY-AB", &settings, "wallet", "manifest", &report, None)
             .await
             .unwrap();
 
@@ -932,10 +937,10 @@ mod tests {
         let settings = RunSettings::default();
         let report = build_report(&[], &settings);
         db.upsert_spawn("4MY-AB", None).await.unwrap();
-        db.save_run("run-a", "4MY-AB", &settings, "", "", &report)
+        db.save_run("run-a", "4MY-AB", &settings, "", "", &report, None)
             .await
             .unwrap();
-        db.save_run("run-b", "4MY-AB", &settings, "", "", &report)
+        db.save_run("run-b", "4MY-AB", &settings, "", "", &report, None)
             .await
             .unwrap();
 
@@ -961,7 +966,7 @@ mod tests {
         let settings = RunSettings::default();
         let report = build_report(&[], &settings);
         db.upsert_spawn("4MY-AB", None).await.unwrap();
-        db.save_run("run-only", "4MY-AB", &settings, "", "", &report)
+        db.save_run("run-only", "4MY-AB", &settings, "", "", &report, None)
             .await
             .unwrap();
 
@@ -988,13 +993,13 @@ mod tests {
         let report = build_report(&[], &settings);
         db.upsert_spawn("4MY-AB", None).await.unwrap();
         db.upsert_spawn("OTHER", None).await.unwrap();
-        db.save_run("r1", "4MY-AB", &settings, "", "", &report)
+        db.save_run("r1", "4MY-AB", &settings, "", "", &report, None)
             .await
             .unwrap();
-        db.save_run("r2", "4MY-AB", &settings, "", "", &report)
+        db.save_run("r2", "4MY-AB", &settings, "", "", &report, None)
             .await
             .unwrap();
-        db.save_run("r3", "OTHER", &settings, "", "", &report)
+        db.save_run("r3", "OTHER", &settings, "", "", &report, None)
             .await
             .unwrap();
 
@@ -1021,7 +1026,7 @@ mod tests {
         let settings = RunSettings::default();
         let report = build_report(&[], &settings);
         db.upsert_spawn("4MY-AB", None).await.unwrap();
-        db.save_run("r1", "4MY-AB", &settings, "", "", &report)
+        db.save_run("r1", "4MY-AB", &settings, "", "", &report, None)
             .await
             .unwrap();
 
@@ -1073,3 +1078,4 @@ mod tests {
         assert_eq!(warp_event.overlay_site_id.as_deref(), Some("site-123"));
     }
 }
+

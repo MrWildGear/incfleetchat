@@ -149,6 +149,14 @@ impl AppState {
         Ok(self.overlay_settings())
     }
 
+    /// Returns the fleet log id (chatlog filename stem) of the active log, if any.
+    pub fn active_fleet_log_id_opt(&self) -> Option<String> {
+        match &self.inner.lock().board.status {
+            BoardStatus::Watching { log_name, .. } => Some(log_name.clone()),
+            _ => None,
+        }
+    }
+
     pub fn list_characters(&self) -> Result<Vec<String>, String> {
         list_characters(&self.chatlogs_dir()).map_err(|e| e.to_string())
     }

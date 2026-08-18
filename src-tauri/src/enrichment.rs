@@ -18,6 +18,7 @@ use crate::analytics_types::{
 };
 use crate::gamelog_parse::{GamelogEvent, GamelogEventKind};
 use crate::gamelog_scan::ListenerLog;
+use crate::types::SessionTrackingSiteKind;
 
 /// Totals rule shared by `enrich_run` and `aggregate_enrichments`:
 /// approach sums non-break sites with a measurable approach; combat total/avg
@@ -273,6 +274,21 @@ fn missile_stats_in_gap(
 /// `site_durations` is parallel to `site_times`: the wallet-reported
 /// `duration_seconds` for each site (`None` marks a break or otherwise
 /// non-countable site).
+
+/// Return the site_kind of the last fleet_warp tracking event that occurred
+/// strictly before `payout_at`. This represents the warp the fleet took into
+/// that site before the payout was received.
+fn site_kind_for_payout(
+    warp_events: &[(DateTime<Utc>, SessionTrackingSiteKind)],
+    payout_at: DateTime<Utc>,
+) -> Option<SessionTrackingSiteKind> {
+    warp_events
+        .iter()
+        .filter(|(at, _)| *at < payout_at)
+        .last()
+        .map(|(_, kind)| *kind)
+}
+
 pub fn enrich_run(
     logs: &[ListenerLog],
     site_times: &[DateTime<Utc>],
@@ -283,6 +299,7 @@ pub fn enrich_run(
     launchers: u32,
     fc_character: Option<&str>,
     wallet_fc_hint: Option<&str>,
+    warp_events: &[(DateTime<Utc>, SessionTrackingSiteKind)],
 ) -> EnrichmentSnapshot {
     let mut diagnostics = Vec::new();
     let listeners: Vec<String> = logs.iter().map(|l| l.listener.clone()).collect();
@@ -348,6 +365,7 @@ pub fn enrich_run(
             _ => Vec::new(),
         };
 
+        let site_kind = site_kind_for_payout(warp_events, occurred_at);
         sites.push(EnrichmentSite {
             occurred_at,
             approach_seconds,
@@ -355,6 +373,7 @@ pub fn enrich_run(
             is_break,
             source,
             missiles: site_missiles,
+            site_kind,
         });
     }
 
@@ -497,6 +516,7 @@ mod tests {
             6,
             Some("Pilot"),
             None,
+            &[],
         );
         let site = &snap.sites[1];
         assert_eq!(site.combat_to_payout_seconds, Some(450));
@@ -524,6 +544,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
         let site = &snap.sites[1];
         assert_eq!(site.combat_to_payout_seconds, Some(480)); // 20:10 - 20:02
@@ -546,6 +567,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
         let site = &snap.sites[1];
         assert_eq!(site.combat_to_payout_seconds, None);
@@ -572,6 +594,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
         let site = &snap.sites[1];
         assert_eq!(site.combat_to_payout_seconds, None);
@@ -598,6 +621,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
         let site = &snap.sites[1];
         assert_eq!(site.combat_to_payout_seconds, Some(500));
@@ -620,6 +644,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
 
         let site = &snap.sites[1];
@@ -645,6 +670,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
 
         let site = &snap.sites[1];
@@ -679,6 +705,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
 
         assert_eq!(snap.missiles.len(), 1);
@@ -713,6 +740,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
         let m = &snap.missiles[0];
         // dead_volleys = 52 − 35 = 17; dead = 17 × 6 = 102
@@ -742,6 +770,7 @@ mod tests {
             6,
             Some("FC Pilot"),
             None,
+            &[],
         );
 
         let first = &snap.sites[0];
@@ -795,6 +824,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
 
         assert_eq!(
@@ -825,6 +855,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
         let break_site = &break_snap.sites[1];
         assert!(break_site.is_break);
@@ -849,6 +880,7 @@ mod tests {
             6,
             Some("FC Pilot"),
             None,
+            &[],
         );
         let site = &snap.sites[1];
         assert!(!site.is_break);
@@ -872,7 +904,7 @@ mod tests {
         let logs = vec![fc];
         let sites = vec![ts(20, 0, 0), ts(20, 20, 0)];
 
-        let snap = enrich_run(&logs, &sites, &[None, None], 25, None, 156, 6, Some("FC Pilot"), None);
+        let snap = enrich_run(&logs, &sites, &[None, None], 25, None, 156, 6, Some("FC Pilot"), None, &[]);
 
         let first = &snap.sites[0];
         assert_eq!(first.approach_seconds, None);
@@ -902,6 +934,7 @@ mod tests {
             6,
             Some("FC Pilot"),
             None,
+            &[],
         );
         let site = &snap.sites[1];
         assert_eq!(site.combat_to_payout_seconds, None);
@@ -934,6 +967,7 @@ mod tests {
             6,
             Some("FC Pilot"),
             None,
+            &[],
         );
         let site = &snap.sites[1];
         assert_eq!(site.combat_to_payout_seconds, Some(300));
@@ -997,6 +1031,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
 
         assert!(snap.sites[0].missiles.iter().any(|m| m.listener == "Gunner"));
@@ -1039,6 +1074,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
 
         assert!(snap.sites[1].is_break);
@@ -1063,6 +1099,7 @@ mod tests {
             6,
             None,
             None,
+            &[],
         );
         assert!(snap.sites[0].missiles.is_empty());
     }
@@ -1080,6 +1117,7 @@ mod tests {
             is_break,
             source: EnrichmentSource::Fc,
             missiles: vec![],
+            site_kind: None,
         }
     }
 

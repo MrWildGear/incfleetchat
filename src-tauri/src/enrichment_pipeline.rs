@@ -1,4 +1,4 @@
-//! Enrichment pipeline: Enrichment inputs + gamelog scan → `enrich_run` → persist,
+﻿//! Enrichment pipeline: Enrichment inputs + gamelog scan â†’ `enrich_run` â†’ persist,
 //! plus load-and-aggregate for Spawn/Overall focus.
 //!
 //! Pure math lives in `enrichment`. The run desk calls through this module
@@ -16,7 +16,7 @@ use crate::timing::{AnalyticsReport, RunSettings};
 use crate::types::SessionTrackingSiteKind;
 use crate::wallet_parse::{extract_wallet_fc_hint, parse_wallet_journal};
 
-/// Run-time bag for one enrich/reenrich — not Tools settings.
+/// Run-time bag for one enrich/reenrich â€” not Tools settings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EnrichmentInputs {
@@ -73,7 +73,7 @@ pub trait EnrichmentStore: Send + Sync {
     fn load_run_for_enrich(
         &self,
         run_id: &str,
-    ) -> impl std::future::Future<Output = Result<Option<(RunSettings, AnalyticsReport, String)>, String>>
+    ) -> impl std::future::Future<Output = Result<Option<(RunSettings, AnalyticsReport, String, Option<String>)>, String>>
            + Send;
 
     fn load_warp_tracking_events(
@@ -103,7 +103,7 @@ impl EnrichmentStore for Db {
     async fn load_run_for_enrich(
         &self,
         run_id: &str,
-    ) -> Result<Option<(RunSettings, AnalyticsReport, String)>, String> {
+    ) -> Result<Option<(RunSettings, AnalyticsReport, String, Option<String>)>, String> {
         Db::load_run_for_enrich(self, run_id)
             .await
             .map_err(|e| e.to_string())
@@ -140,6 +140,11 @@ impl GamelogScan for FsGamelogScan {
 }
 
 /// Scan gamelogs (when the directory exists), run enrichment math, persist.
+///
+/// `fleet_log_id` is the chatlog file identifier used to look up PiP
+/// session-tracking events (`session_tracking_events.fleet_log_id`). Pass the
+/// same value recorded alongside the run in the run desk. When `None`, no
+/// tracking events are joined.
 pub async fn enrich_and_save<S: EnrichmentStore, G: GamelogScan>(
     store: &S,
     scan: &G,
@@ -148,6 +153,7 @@ pub async fn enrich_and_save<S: EnrichmentStore, G: GamelogScan>(
     report: &AnalyticsReport,
     wallet_text: &str,
     inputs: &EnrichmentInputs,
+    fleet_log_id: Option<&str>,
 ) -> Result<(), String> {
     if report.sites.is_empty() {
         return Ok(());
@@ -169,7 +175,7 @@ pub async fn enrich_and_save<S: EnrichmentStore, G: GamelogScan>(
         ScanResult {
             logs: Vec::new(),
             diagnostics: vec![format!(
-                "Gamelogs directory not found: {} — enrichment unavailable",
+                "Gamelogs directory not found: {} â€” enrichment unavailable",
                 gamelogs_dir.display()
             )],
         }
@@ -180,12 +186,15 @@ pub async fn enrich_and_save<S: EnrichmentStore, G: GamelogScan>(
         .first()
         .and_then(|e| extract_wallet_fc_hint(&e.description));
 
-    // Load fleet_log_id from the wallet report to look up PiP tracking events.
-    let fleet_log_id = report.fleet_log_id.as_deref().unwrap_or(run_id);
-    let warp_events = store
-        .load_warp_tracking_events(fleet_log_id)
-        .await
-        .unwrap_or_default();
+    // Load PiP session-tracking events to annotate each site with its site_kind.
+    let warp_events = if let Some(log_id) = fleet_log_id {
+        store
+            .load_warp_tracking_events(log_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     let mut snapshot = enrich_run(
         &scan_result.logs,
@@ -220,8 +229,18 @@ pub async fn reenrich<S: EnrichmentStore, G: GamelogScan>(
         .load_run_for_enrich(run_id)
         .await?
         .ok_or_else(|| format!("Run {run_id} not found"))?;
-    let (settings, report, wallet_text) = bundle;
-    enrich_and_save(store, scan, run_id, &settings, &report, &wallet_text, inputs).await
+    let (settings, report, wallet_text, fleet_log_id) = bundle;
+    enrich_and_save(
+        store,
+        scan,
+        run_id,
+        &settings,
+        &report,
+        &wallet_text,
+        inputs,
+        fleet_log_id.as_deref(),
+    )
+    .await
 }
 
 /// Load each run's enrichment (oldest first) and aggregate the ones that
@@ -301,8 +320,20 @@ mod tests {
         async fn load_run_for_enrich(
             &self,
             run_id: &str,
-        ) -> Result<Option<(RunSettings, AnalyticsReport, String)>, String> {
-            Ok(self.runs.lock().get(run_id).cloned())
+        ) -> Result<Option<(RunSettings, AnalyticsReport, String, Option<String>)>, String> {
+            Ok(self
+                .runs
+                .lock()
+                .get(run_id)
+                .cloned()
+                .map(|(s, r, w)| (s, r, w, None)))
+        }
+
+        async fn load_warp_tracking_events(
+            &self,
+            _fleet_log_id: &str,
+        ) -> Result<Vec<(DateTime<Utc>, SessionTrackingSiteKind)>, String> {
+            Ok(Vec::new())
         }
     }
 
@@ -385,6 +416,7 @@ mod tests {
             &report,
             "",
             &EnrichmentInputs::default(),
+            None,
         )
         .await
         .unwrap();
@@ -419,6 +451,7 @@ mod tests {
             &report,
             "",
             &inputs_with_dir(dir.path()),
+            None,
         )
         .await
         .unwrap();
@@ -456,6 +489,7 @@ mod tests {
             &report,
             "",
             &inputs,
+            None,
         )
         .await
         .unwrap();
@@ -516,6 +550,7 @@ mod tests {
                 is_break: false,
                 source: EnrichmentSource::Fc,
                 missiles: vec![],
+                site_kind: None,
             }],
             missiles: vec![MissileStat {
                 listener: "A".into(),
@@ -560,3 +595,10 @@ mod tests {
         );
     }
 }
+
+
+
+
+
+
+

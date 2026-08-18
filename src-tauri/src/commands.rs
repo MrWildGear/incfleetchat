@@ -256,9 +256,11 @@ async fn run_desk_paste(
 #[tauri::command]
 async fn run_desk_analyze(
     desk: State<'_, Arc<RunDesk>>,
+    state: State<'_, Arc<AppState>>,
     inputs: EnrichmentInputs,
 ) -> Result<EditionFocus, String> {
-    desk.analyze(&inputs).await
+    let fleet_log_id = state.active_fleet_log_id_opt();
+    desk.analyze(&inputs, fleet_log_id).await
 }
 
 #[tauri::command]

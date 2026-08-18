@@ -109,7 +109,11 @@ impl RunDesk {
         self.snapshot().await
     }
 
-    pub async fn analyze(&self, inputs: &EnrichmentInputs) -> Result<EditionFocus, String> {
+    pub async fn analyze(
+        &self,
+        inputs: &EnrichmentInputs,
+        fleet_log_id: Option<String>,
+    ) -> Result<EditionFocus, String> {
         let (settings, spawn_draft, pending, wallet_text, manifest_text) = {
             let st = self.inner.lock();
             (
@@ -172,6 +176,7 @@ impl RunDesk {
                 &wallet_text,
                 &manifest_text,
                 &report,
+                fleet_log_id.as_deref(),
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -190,6 +195,7 @@ impl RunDesk {
             &report,
             &wallet_text,
             inputs,
+            fleet_log_id.as_deref(),
         )
         .await;
 
@@ -561,6 +567,7 @@ mod tests {
             is_break,
             source: EnrichmentSource::Fc,
             missiles: vec![],
+            site_kind: None,
         }
     }
 
@@ -635,7 +642,7 @@ Immensea
 2026.07.29 23:08\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\tx\n\
 2026.07.29 23:14\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\ty\n";
         desk.paste(Tray::Wallet, wallet).await.unwrap();
-        let focus = desk.analyze(&default_enrichment_inputs()).await.unwrap();
+        let focus = desk.analyze(&default_enrichment_inputs(), None).await.unwrap();
         assert!(focus.report.is_some());
         assert_eq!(focus.report.as_ref().unwrap().session.sites_ran, 2);
         assert_eq!(focus.catalog.runs.len(), 1);
@@ -699,7 +706,7 @@ Immensea
 2026.07.29 23:14\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\tCONCORD rewarded FC Pilot for services performed.\n";
         desk.paste(Tray::Wallet, wallet).await.unwrap();
 
-        let focus = desk.analyze(&inputs).await.unwrap();
+        let focus = desk.analyze(&inputs, None).await.unwrap();
         let enrichment = focus
             .enrichment
             .expect("enrichment should be attached to focus right after analyze");
@@ -768,7 +775,7 @@ Immensea
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         let wallet2 = sample_wallet_at(6, 12);
         desk.paste(Tray::Wallet, &wallet2).await.unwrap();
-        let focus2 = desk.analyze(&default_enrichment_inputs()).await.unwrap();
+        let focus2 = desk.analyze(&default_enrichment_inputs(), None).await.unwrap();
         let run2 = focus2
             .catalog
             .runs
@@ -828,11 +835,11 @@ Immensea
             .await
             .unwrap();
         desk.db
-            .save_run("run-a", "4MY-AB", &settings, "", "", &report)
+            .save_run("run-a", "4MY-AB", &settings, "", "", &report, None)
             .await
             .unwrap();
         desk.db
-            .save_run("run-b", "4MY-AB", &settings, "", "", &report)
+            .save_run("run-b", "4MY-AB", &settings, "", "", &report, None)
             .await
             .unwrap();
 
@@ -889,7 +896,7 @@ Immensea
         .unwrap();
         let wallet2 = sample_wallet_at(6, 12);
         desk.paste(Tray::Wallet, &wallet2).await.unwrap();
-        let focus2 = desk.analyze(&default_enrichment_inputs()).await.unwrap();
+        let focus2 = desk.analyze(&default_enrichment_inputs(), None).await.unwrap();
         let run2 = focus2
             .catalog
             .runs
@@ -985,7 +992,7 @@ Immensea
 2026.07.29 23:14\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\ty\n";
         desk.paste(Tray::Wallet, wallet).await.unwrap();
 
-        let focus = desk.analyze(&inputs).await.unwrap();
+        let focus = desk.analyze(&inputs, None).await.unwrap();
 
         assert_eq!(focus.report.as_ref().unwrap().session.sites_ran, 2);
         let enrichment = focus
@@ -1044,7 +1051,7 @@ Immensea
         .await
         .unwrap();
         desk.paste(Tray::Wallet, sample_wallet()).await.unwrap();
-        desk.analyze(&default_enrichment_inputs()).await.unwrap()
+        desk.analyze(&default_enrichment_inputs(), None).await.unwrap()
     }
 
     #[tokio::test]
@@ -1087,7 +1094,7 @@ Immensea
         // Re-stage wallet for second analyze (manifest still staged)
         let wallet2 = sample_wallet_at(6, 12);
         desk.paste(Tray::Wallet, &wallet2).await.unwrap();
-        let second = desk.analyze(&default_enrichment_inputs()).await.unwrap();
+        let second = desk.analyze(&default_enrichment_inputs(), None).await.unwrap();
         let run_b = second
             .catalog
             .runs
@@ -1159,3 +1166,4 @@ Immensea
         assert_eq!(after.scope, before.scope);
     }
 }
+
