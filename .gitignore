@@ -26,3 +26,8 @@ src-tauri/target
 *.sw?
 
 .worktrees
+
+# Optional: ignore per-day agent session logs
+.agents/sessions/*.md
+!.agents/sessions/README.md
+!.agents/sessions/TEMPLATE.md
