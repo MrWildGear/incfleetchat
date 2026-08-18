@@ -34,6 +34,21 @@ function compareNullableNumber(
   return (a - b) * sign;
 }
 
+function formatSiteKind(
+  kind: "ota_hacking" | "nco" | "nmc_mining" | null | undefined,
+): string {
+  switch (kind) {
+    case "ota_hacking":
+      return "OTA";
+    case "nco":
+      return "NCO";
+    case "nmc_mining":
+      return "NMC";
+    default:
+      return "—";
+  }
+}
+
 function formatDuration(seconds: number | null | undefined): string {
   if (seconds == null || !Number.isFinite(seconds)) return "—";
   const s = Math.round(seconds);
@@ -578,6 +593,7 @@ export function JoinedResultsView({
                   </th>
                 );
               })}
+              <th className="px-2 py-1">Site type</th>
             </tr>
           </thead>
           <tbody>
@@ -610,6 +626,9 @@ export function JoinedResultsView({
                   </td>
                   <td className="px-2 py-1">
                     {s.is_break ? "yes" : ""}
+                  </td>
+                  <td className="px-2 py-1">
+                    {e ? formatSiteKind(e.site_kind) : "—"}
                   </td>
                   <td className="px-2 py-1">
                     {e ? formatDuration(e.approach_seconds) : "—"}

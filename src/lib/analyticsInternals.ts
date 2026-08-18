@@ -95,6 +95,7 @@ export type EnrichmentSite = {
   is_break: boolean;
   source: EnrichmentSource;
   missiles: MissileStat[];
+  site_kind?: "ota_hacking" | "nco" | "nmc_mining" | null;
 };
 
 export type EnrichmentTotals = {
