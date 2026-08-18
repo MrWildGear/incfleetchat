@@ -292,6 +292,37 @@ impl Db {
         Ok(out)
     }
 
+    /// Load fleet-warp tracking events for a run's fleet log, oldest first.
+    /// Returns `(occurred_at, site_kind)` pairs; only `fleet_warp` rows with a
+    /// non-null `site_kind` are returned.
+    pub async fn load_warp_tracking_events(
+        &self,
+        fleet_log_id: &str,
+    ) -> Result<Vec<(DateTime<Utc>, SessionTrackingSiteKind)>, sqlx::Error> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT occurred_at, site_kind FROM session_tracking_events \
+             WHERE fleet_log_id = ? AND event_kind = 'fleet_warp' AND site_kind IS NOT NULL \
+             ORDER BY occurred_at ASC",
+        )
+        .bind(fleet_log_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (at_str, kind_str) in rows {
+            let at = at_str
+                .parse::<DateTime<Utc>>()
+                .map_err(|_| sqlx::Error::RowNotFound)?;
+            let kind = match kind_str.as_str() {
+                "ota_hacking" => SessionTrackingSiteKind::OtaHacking,
+                "nco" => SessionTrackingSiteKind::Nco,
+                "nmc_mining" => SessionTrackingSiteKind::NmcMining,
+                _ => continue,
+            };
+            out.push((at, kind));
+        }
+        Ok(out)
+    }
+
     pub async fn record_session_tracking_event(
         &self,
         fleet_log_id: &str,

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::spawn_parse::SpawnDraft;
 use crate::timing::{AnalyticsReport, RunSettings};
+use crate::types::SessionTrackingSiteKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,7 +99,6 @@ pub enum EnrichmentSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct EnrichmentSite {
     pub occurred_at: DateTime<Utc>,
     pub approach_seconds: Option<i64>,
@@ -106,6 +106,9 @@ pub struct EnrichmentSite {
     pub is_break: bool,
     pub source: EnrichmentSource,
     pub missiles: Vec<MissileStat>,
+    /// Site type chosen from the fleet-warp PiP, if the user recorded one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_kind: Option<SessionTrackingSiteKind>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

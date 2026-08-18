@@ -13,6 +13,7 @@ use crate::db::{Db, EnrichmentLoad};
 use crate::enrichment::{aggregate_enrichments, enrich_run};
 use crate::gamelog_scan::{default_gamelogs_dir, scan_gamelogs, ScanResult};
 use crate::timing::{AnalyticsReport, RunSettings};
+use crate::types::SessionTrackingSiteKind;
 use crate::wallet_parse::{extract_wallet_fc_hint, parse_wallet_journal};
 
 /// Run-time bag for one enrich/reenrich — not Tools settings.
@@ -74,6 +75,12 @@ pub trait EnrichmentStore: Send + Sync {
         run_id: &str,
     ) -> impl std::future::Future<Output = Result<Option<(RunSettings, AnalyticsReport, String)>, String>>
            + Send;
+
+    fn load_warp_tracking_events(
+        &self,
+        fleet_log_id: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<(DateTime<Utc>, SessionTrackingSiteKind)>, String>>
+           + Send;
 }
 
 impl EnrichmentStore for Db {
@@ -98,6 +105,15 @@ impl EnrichmentStore for Db {
         run_id: &str,
     ) -> Result<Option<(RunSettings, AnalyticsReport, String)>, String> {
         Db::load_run_for_enrich(self, run_id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn load_warp_tracking_events(
+        &self,
+        fleet_log_id: &str,
+    ) -> Result<Vec<(DateTime<Utc>, SessionTrackingSiteKind)>, String> {
+        Db::load_warp_tracking_events(self, fleet_log_id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -164,6 +180,13 @@ pub async fn enrich_and_save<S: EnrichmentStore, G: GamelogScan>(
         .first()
         .and_then(|e| extract_wallet_fc_hint(&e.description));
 
+    // Load fleet_log_id from the wallet report to look up PiP tracking events.
+    let fleet_log_id = report.fleet_log_id.as_deref().unwrap_or(run_id);
+    let warp_events = store
+        .load_warp_tracking_events(fleet_log_id)
+        .await
+        .unwrap_or_default();
+
     let mut snapshot = enrich_run(
         &scan_result.logs,
         &site_times,
@@ -174,6 +197,7 @@ pub async fn enrich_and_save<S: EnrichmentStore, G: GamelogScan>(
         launchers,
         inputs.fc_character_opt(),
         wallet_fc_hint.as_deref(),
+        &warp_events,
     );
     snapshot
         .diagnostics
