@@ -1,6 +1,6 @@
 [package]
 name = "incfleetchat"
-version = "0.1.3"
+version = "0.1.4"
 description = "EVE fleet site timer overlay"
 authors = ["you"]
 edition = "2021"
