@@ -7,9 +7,16 @@ use std::sync::Arc;
 use crate::encoding::read_chatlog;
 use crate::board::build_board;
 use crate::db::Db;
+use crate::gamelog_scan::default_gamelogs_dir;
+use crate::gamelog_watch::{
+    latest_following_warp_at, poll_following_warp, resolve_active_gamelog, WarpPoll, WarpWatchCursor,
+};
 use crate::parse::parse_site_candidates;
 use crate::resolve::{fleet_log_id, list_characters, resolve_active_fleet_log};
-use crate::types::{Board, BoardStatus, OverlaySettings};
+use crate::types::{
+    Board, BoardStatus, OverlaySettings, RecordSessionTrackingInput, SessionTrackingEvent,
+    SessionTrackingEventKind,
+};
 
 pub struct AppState {
     pub db: Db,
@@ -18,10 +25,13 @@ pub struct AppState {
 
 struct Inner {
     settings: OverlaySettings,
+    gamelogs_dir: Option<String>,
     board: Board,
     ran_ids: HashSet<String>,
     cleared_ids: HashSet<String>,
     active_log: Option<PathBuf>,
+    warp_cursor: WarpWatchCursor,
+    tracking_pip_dismissed: bool,
 }
 
 impl AppState {
@@ -32,10 +42,12 @@ impl AppState {
             .map_err(|e| e.to_string())?;
         let ran_ids = db.load_ran_ids().await.map_err(|e| e.to_string())?;
         let cleared_ids = db.load_cleared_ids().await.map_err(|e| e.to_string())?;
+        let tools = db.get_tools_settings().await.map_err(|e| e.to_string())?;
         let state = Arc::new(Self {
             db,
             inner: Mutex::new(Inner {
                 settings,
+                gamelogs_dir: tools.gamelogs_dir,
                 board: Board {
                     status: BoardStatus::NoCharacter,
                     sites: vec![],
@@ -45,6 +57,8 @@ impl AppState {
                 ran_ids,
                 cleared_ids,
                 active_log: None,
+                warp_cursor: WarpWatchCursor::default(),
+                tracking_pip_dismissed: false,
             }),
         });
         state.refresh_board();
@@ -67,13 +81,65 @@ impl AppState {
         default_chatlogs_dir()
     }
 
+    pub fn gamelogs_dir(&self) -> PathBuf {
+        let dir = self.inner.lock().gamelogs_dir.clone();
+        if let Some(dir) = dir {
+            if !dir.trim().is_empty() {
+                return PathBuf::from(dir);
+            }
+        }
+        default_gamelogs_dir()
+    }
+
+    pub fn set_cached_gamelogs_dir(&self, dir: Option<String>) {
+        let mut inner = self.inner.lock();
+        inner.gamelogs_dir = dir;
+        inner.warp_cursor = WarpWatchCursor::default();
+    }
+
+    pub fn poll_listener_following_warp(&self) -> bool {
+        let character = {
+            let inner = self.inner.lock();
+            match &inner.settings.character {
+                Some(c) if !c.is_empty() => c.clone(),
+                _ => return false,
+            }
+        };
+        let dir = self.gamelogs_dir();
+        let path = resolve_active_gamelog(&dir, &character).ok().flatten();
+        let latest = path.as_ref().and_then(|p| latest_following_warp_at(p));
+        let mut inner = self.inner.lock();
+        let poll = poll_following_warp(&mut inner.warp_cursor, path, latest);
+        if matches!(poll, WarpPoll::NewWarp) {
+            inner.tracking_pip_dismissed = false;
+            return true;
+        }
+        false
+    }
+
+    pub fn tracking_pip_should_open(&self) -> bool {
+        let inner = self.inner.lock();
+        inner.settings.tracking_pip_enabled && !inner.tracking_pip_dismissed
+    }
+
+    pub fn dismiss_tracking_pip(&self) {
+        self.inner.lock().tracking_pip_dismissed = true;
+    }
+
     pub async fn set_overlay_settings(
         &self,
         patch: OverlaySettings,
     ) -> Result<OverlaySettings, String> {
         {
             let mut inner = self.inner.lock();
+            let character_changed = inner.settings.character != patch.character;
             inner.settings = patch.clone();
+            if character_changed {
+                inner.warp_cursor = WarpWatchCursor::default();
+            }
+            if !inner.settings.tracking_pip_enabled {
+                inner.tracking_pip_dismissed = true;
+            }
         }
         self.db
             .set_overlay_settings(&patch)
@@ -280,6 +346,53 @@ impl AppState {
             inner.board.updated_at = now;
         }
         Ok(self.board())
+    }
+
+    fn active_fleet_log_id(&self) -> Result<String, String> {
+        match &self.inner.lock().board.status {
+            BoardStatus::Watching { log_name, .. } => Ok(log_name.clone()),
+            BoardStatus::WaitingForLog { character } => Err(format!(
+                "Session tracking requires an active fleet log (waiting for log for {character})"
+            )),
+            BoardStatus::NoCharacter => {
+                Err("Session tracking requires a configured Listener".into())
+            }
+            BoardStatus::Error { message } => Err(message.clone()),
+        }
+    }
+
+    pub async fn record_session_tracking_event_cmd(
+        &self,
+        input: RecordSessionTrackingInput,
+    ) -> Result<SessionTrackingEvent, String> {
+        match input.event_kind {
+            SessionTrackingEventKind::FleetWarp => {
+                if input.site_kind.is_none() {
+                    return Err("Fleet warp tracking requires a site kind".into());
+                }
+            }
+            SessionTrackingEventKind::BreakStart => {
+                if input.site_kind.is_some() {
+                    return Err("Break tracking must not include a site kind".into());
+                }
+            }
+        }
+        let fleet_log_id = match self.active_fleet_log_id() {
+            Ok(id) => id,
+            Err(_) => self
+                .inner
+                .lock()
+                .warp_cursor
+                .path
+                .as_ref()
+                .map(|p| fleet_log_id(p))
+                .ok_or_else(|| "Session tracking requires a Listener gamelog".to_string())?,
+        };
+        let now = Utc::now();
+        self.db
+            .record_session_tracking_event(&fleet_log_id, &input, now)
+            .await
+            .map_err(|e| e.to_string())
     }
 }
 

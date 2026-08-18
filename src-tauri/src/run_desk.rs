@@ -10,6 +10,16 @@ use crate::spawn_parse::{parse_manifest, SpawnDraft};
 use crate::timing::{build_report, merge_reports, AnalyticsReport, RunSettings};
 use crate::wallet_parse::{parse_wallet_journal, WalletPayout};
 
+fn payout_import_key(p: &WalletPayout) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        p.occurred_at.timestamp(),
+        p.amount_isk,
+        p.ref_type,
+        p.description.trim()
+    )
+}
+
 pub struct RunDesk {
     db: Db,
     inner: Mutex<DeskState>,
@@ -120,7 +130,30 @@ impl RunDesk {
             return Err("No qualifying Corporate Reward Payout rows for expected ISK".into());
         }
 
-        let report = build_report(&pending, &settings);
+        let pending_with_keys: Vec<(WalletPayout, String)> = pending
+            .iter()
+            .cloned()
+            .map(|p| {
+                let key = payout_import_key(&p);
+                (p, key)
+            })
+            .collect();
+        let candidate_keys: Vec<String> = pending_with_keys.iter().map(|(_, k)| k.clone()).collect();
+        let imported_keys = self
+            .db
+            .load_imported_wallet_keys(&candidate_keys)
+            .await
+            .map_err(|e| e.to_string())?;
+        let filtered_with_keys: Vec<(WalletPayout, String)> = pending_with_keys
+            .into_iter()
+            .filter(|(_, key)| !imported_keys.contains(key))
+            .collect();
+        let skipped_duplicates = candidate_keys.len().saturating_sub(filtered_with_keys.len());
+        if filtered_with_keys.is_empty() {
+            return Err("All qualifying wallet payouts are already imported; nothing new to add".into());
+        }
+        let filtered: Vec<WalletPayout> = filtered_with_keys.iter().map(|(p, _)| p.clone()).collect();
+        let report = build_report(&filtered, &settings);
         let run_id = format!(
             "{}-{}",
             constellation,
@@ -140,6 +173,12 @@ impl RunDesk {
                 &manifest_text,
                 &report,
             )
+            .await
+            .map_err(|e| e.to_string())?;
+        let imported_new_keys: Vec<String> =
+            filtered_with_keys.into_iter().map(|(_, key)| key).collect();
+        self.db
+            .record_imported_wallet_keys(&run_id, &imported_new_keys)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -168,6 +207,15 @@ impl RunDesk {
                 level: "info".into(),
                 message: format!("Saved run {} ({} sites)", run_id, report.session.sites_ran),
             });
+            if skipped_duplicates > 0 {
+                st.diagnostics.push(Diagnostic {
+                    level: "info".into(),
+                    message: format!(
+                        "{} wallet payout(s) skipped as already imported",
+                        skipped_duplicates
+                    ),
+                });
+            }
             if let Err(e) = enrich_result {
                 st.diagnostics.push(Diagnostic {
                     level: "warn".into(),
@@ -718,7 +766,8 @@ Immensea
         let constellation = focus1.catalog.runs[0].constellation.clone();
 
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        desk.paste(Tray::Wallet, sample_wallet()).await.unwrap();
+        let wallet2 = sample_wallet_at(6, 12);
+        desk.paste(Tray::Wallet, &wallet2).await.unwrap();
         let focus2 = desk.analyze(&default_enrichment_inputs()).await.unwrap();
         let run2 = focus2
             .catalog
@@ -824,7 +873,23 @@ Immensea
         // A second analyze under the same constellation seals a second run
         // in the same spawn.
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        let focus2 = seed_one_run(&desk).await;
+        desk.paste(Tray::Manifest, sample_manifest()).await.unwrap();
+        desk.amend(AmendOp::SetSessionSettings {
+            settings: RunSettings {
+                space: SpaceBand::LowNull,
+                fleet_size: 15,
+                expected_isk: 15_000_000,
+                lp_per_char: 2_000,
+                isk_per_lp: 1400.0,
+                break_threshold_minutes: 25,
+                run_start: None,
+            },
+        })
+        .await
+        .unwrap();
+        let wallet2 = sample_wallet_at(6, 12);
+        desk.paste(Tray::Wallet, &wallet2).await.unwrap();
+        let focus2 = desk.analyze(&default_enrichment_inputs()).await.unwrap();
         let run2 = focus2
             .catalog
             .runs
@@ -955,6 +1020,14 @@ Immensea
 2026.07.29 23:14\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\ty\n"
     }
 
+    fn sample_wallet_at(min1: u32, min2: u32) -> String {
+        format!(
+            "\
+2026.07.29 23:{min1:02}\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\tx\n\
+2026.07.29 23:{min2:02}\tCorporate Reward Payout\t15,000,000 ISK\t0 ISK\ty\n"
+        )
+    }
+
     async fn seed_one_run(desk: &RunDesk) -> EditionFocus {
         desk.paste(Tray::Manifest, sample_manifest()).await.unwrap();
         desk.amend(AmendOp::SetSessionSettings {
@@ -1012,7 +1085,8 @@ Immensea
         let first = seed_one_run(&desk).await;
         let run_a = first.catalog.runs[0].run_id.clone();
         // Re-stage wallet for second analyze (manifest still staged)
-        desk.paste(Tray::Wallet, sample_wallet()).await.unwrap();
+        let wallet2 = sample_wallet_at(6, 12);
+        desk.paste(Tray::Wallet, &wallet2).await.unwrap();
         let second = desk.analyze(&default_enrichment_inputs()).await.unwrap();
         let run_b = second
             .catalog

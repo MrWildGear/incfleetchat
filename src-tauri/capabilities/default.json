@@ -2,12 +2,15 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for main and tools windows",
-  "windows": ["main", "tools"],
-  "permissions": [
+    "windows": ["main", "tools", "tracking-pip"],
+    "permissions": [
     "core:default",
     "opener:default",
     "core:window:allow-set-always-on-top",
     "core:window:allow-set-focus",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-unminimize",
     "core:webview:allow-create-webview-window",
     "core:window:allow-create",
     "window-state:default",

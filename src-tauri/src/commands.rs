@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 use crate::analytics_types::{AmendOp, EditionFocus, ReportScope, Tray};
 use crate::db::Db;
 use crate::enrichment_pipeline::EnrichmentInputs;
 use crate::run_desk::RunDesk;
 use crate::state::{default_chatlogs_dir, AppState};
-use crate::types::{Board, OverlaySettings, ToolsSettings};
+use crate::types::{Board, OverlaySettings, RecordSessionTrackingInput, SessionTrackingEvent, ToolsSettings};
 use crate::watch;
 
 #[tauri::command]
@@ -56,6 +56,7 @@ pub struct OverlaySettingsPatch {
     pub character: Option<Option<String>>,
     pub chatlogs_dir: Option<Option<String>>,
     pub always_on_top: Option<bool>,
+    pub tracking_pip_enabled: Option<bool>,
 }
 
 #[tauri::command]
@@ -75,6 +76,15 @@ async fn set_overlay_settings(
         next.always_on_top = a;
         if let Some(win) = app.get_webview_window("main") {
             let _ = win.set_always_on_top(a);
+        }
+    }
+    if let Some(enabled) = patch.tracking_pip_enabled {
+        next.tracking_pip_enabled = enabled;
+        if !enabled {
+            if let Some(win) = app.get_webview_window("tracking-pip") {
+                let _ = win.hide();
+            }
+            state.dismiss_tracking_pip();
         }
     }
     let settings = state.set_overlay_settings(next).await?;
@@ -126,6 +136,7 @@ async fn set_tools_settings(
         .set_tools_settings(&next)
         .await
         .map_err(|e| e.to_string())?;
+    state.set_cached_gamelogs_dir(next.gamelogs_dir.clone());
     Ok(next)
 }
 
@@ -150,11 +161,67 @@ async fn set_always_on_top(
 }
 
 #[tauri::command]
+async fn record_session_tracking_event(
+    state: State<'_, Arc<AppState>>,
+    input: RecordSessionTrackingInput,
+) -> Result<SessionTrackingEvent, String> {
+    state.record_session_tracking_event_cmd(input).await
+}
+
+#[tauri::command]
 async fn refresh_board(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<Board, String> {
     state.refresh_board();
     let board = state.board();
     let _ = app.emit("board-updated", &board);
     Ok(board)
+}
+
+fn show_tracking_pip(app: &AppHandle, state: Arc<AppState>) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("tracking-pip") {
+        let _ = win.unminimize();
+        if !win.is_visible().map_err(|e| e.to_string())? {
+            win.show().map_err(|e| e.to_string())?;
+        }
+        let _ = app.emit_to("tracking-pip", "fleet-warp-detected", ());
+        return Ok(());
+    }
+    let win = WebviewWindowBuilder::new(app, "tracking-pip", WebviewUrl::App("index.html".into()))
+        .title("Fleet warp")
+        .inner_size(240.0, 220.0)
+        .min_inner_size(200.0, 180.0)
+        .resizable(true)
+        .always_on_top(true)
+        .focused(false)
+        .decorations(true)
+        .skip_taskbar(false)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let win_for_handler = win.clone();
+    win.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            let _ = win_for_handler.hide();
+            state.dismiss_tracking_pip();
+            api.prevent_close();
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_tracking_pip(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    if !state.tracking_pip_should_open() {
+        return Ok(());
+    }
+    show_tracking_pip(&app, state.inner().clone())
+}
+
+#[tauri::command]
+async fn hide_tracking_pip(app: AppHandle, state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.dismiss_tracking_pip();
+    if let Some(win) = app.get_webview_window("tracking-pip") {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -276,7 +343,8 @@ pub fn run_app() {
                 let _ = win.set_always_on_top(settings.always_on_top);
             }
 
-            watch::start_watcher(handle, state.clone())?;
+            watch::start_watcher(handle.clone(), state.clone())?;
+            watch::start_gamelog_watcher(handle, state.clone())?;
             app.manage(state);
             app.manage(desk);
             Ok(())
@@ -293,6 +361,9 @@ pub fn run_app() {
             list_characters,
             set_always_on_top,
             refresh_board,
+            record_session_tracking_event,
+            open_tracking_pip,
+            hide_tracking_pip,
             open_tools_window,
             run_desk_open,
             run_desk_paste,

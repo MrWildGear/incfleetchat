@@ -1,7 +1,12 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Board, OverlaySettings } from "./lib/types";
+import type {
+  Board,
+  OverlaySettings,
+  RecordSessionTrackingInput,
+  SessionTrackingEvent,
+} from "./lib/types";
 import { emptyBoard } from "./lib/types";
 
 type Store = {
@@ -15,6 +20,9 @@ type Store = {
   tick: () => void;
   hydrate: () => Promise<void>;
   markRan: (siteId: string) => Promise<void>;
+  recordSessionTracking: (
+    input: RecordSessionTrackingInput,
+  ) => Promise<SessionTrackingEvent>;
   clearSite: (siteId: string) => Promise<void>;
   clearReady: () => Promise<void>;
   loadCharacters: () => Promise<void>;
@@ -22,6 +30,7 @@ type Store = {
     character?: string | null;
     chatlogs_dir?: string | null;
     always_on_top?: boolean;
+    tracking_pip_enabled?: boolean;
   }) => Promise<void>;
   setAlwaysOnTop: (on: boolean) => Promise<void>;
 };
@@ -53,6 +62,8 @@ export const useAppStore = create<Store>((set, get) => ({
     const board = await invoke<Board>("mark_ran", { siteId });
     set({ board });
   },
+  recordSessionTracking: async (input) =>
+    invoke<SessionTrackingEvent>("record_session_tracking_event", { input }),
   clearSite: async (siteId) => {
     const board = await invoke<Board>("clear_site", { siteId });
     set({ board });
@@ -70,6 +81,9 @@ export const useAppStore = create<Store>((set, get) => ({
     if ("character" in patch) payload.character = patch.character;
     if ("chatlogs_dir" in patch) payload.chatlogs_dir = patch.chatlogs_dir;
     if ("always_on_top" in patch) payload.always_on_top = patch.always_on_top;
+    if ("tracking_pip_enabled" in patch) {
+      payload.tracking_pip_enabled = patch.tracking_pip_enabled;
+    }
     const settings = await invoke<OverlaySettings>("set_overlay_settings", {
       patch: payload,
     });

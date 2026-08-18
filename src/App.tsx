@@ -8,6 +8,7 @@ import { useAppUpdater } from "./hooks/useAppUpdater";
 import { cn } from "./lib/utils";
 import type { Board, BoardStatus, SiteRow } from "./lib/types";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 function statusLabel(status: BoardStatus): string {
   switch (status.kind) {
@@ -72,6 +73,21 @@ function App() {
         .catch(() => {});
     }, 5000);
     return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void listen("fleet-warp-detected", () => {
+      void invoke("open_tracking_pip");
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   const readyCount = useMemo(

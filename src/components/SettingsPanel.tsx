@@ -78,6 +78,20 @@ export function SettingsPanel({
           Always on top
         </label>
 
+        <label className="mt-3 flex items-center gap-2 text-sm text-fg">
+          <input
+            type="checkbox"
+            checked={settings.tracking_pip_enabled}
+            onChange={(e) =>
+              void saveSettings({ tracking_pip_enabled: e.target.checked })
+            }
+          />
+          Fleet warp popup
+        </label>
+        <p className="mt-1 text-xs text-muted">
+          If dismissed, it reopens on the next new warp.
+        </p>
+
         <div className="mt-6 border-t border-border pt-4">
           <p className="text-xs uppercase tracking-wide text-muted">About</p>
           <p className="mt-1 text-sm text-fg">

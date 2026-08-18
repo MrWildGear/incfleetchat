@@ -57,6 +57,57 @@ pub fn start_watcher(app: AppHandle, state: Arc<AppState>) -> Result<(), String>
     Ok(())
 }
 
+pub fn start_gamelog_watcher(app: AppHandle, state: Arc<AppState>) -> Result<(), String> {
+    let dir = state.gamelogs_dir();
+    std::fs::create_dir_all(&dir).ok();
+
+    let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
+    let mut watcher = RecommendedWatcher::new(tx, Config::default()).map_err(|e| e.to_string())?;
+    watcher
+        .watch(&dir, RecursiveMode::NonRecursive)
+        .map_err(|e| e.to_string())?;
+    std::mem::forget(watcher);
+
+    let _ = state.poll_listener_following_warp();
+
+    let watch_dir = dir.clone();
+    std::thread::spawn(move || {
+        let mut pending = false;
+        loop {
+            match rx.recv_timeout(Duration::from_millis(1000)) {
+                Ok(Ok(event)) => {
+                    if event_touches_gamelog(&watch_dir, &event) {
+                        pending = true;
+                    }
+                }
+                Ok(Err(_)) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    pending = true;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            while let Ok(Ok(event)) = rx.try_recv() {
+                if event_touches_gamelog(&watch_dir, &event) {
+                    pending = true;
+                }
+            }
+            if pending {
+                pending = false;
+                if state.poll_listener_following_warp() && state.tracking_pip_should_open() {
+                    let _ = app.emit("fleet-warp-detected", ());
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn event_touches_gamelog(gamelogs: &PathBuf, event: &Event) -> bool {
+    use crate::gamelog_watch::path_in_gamelogs;
+    event.paths.iter().any(|p| path_in_gamelogs(gamelogs, p))
+}
+
 fn event_touches_fleet(chatlogs: &PathBuf, event: &Event) -> bool {
     event.paths.iter().any(|p| path_in_chatlogs(chatlogs, p))
 }
@@ -92,6 +143,7 @@ mod tests {
                 character: Some("Test Pilot".into()),
                 chatlogs_dir: Some(dir.path().to_string_lossy().to_string()),
                 always_on_top: false,
+                tracking_pip_enabled: true,
             })
             .await
             .unwrap();

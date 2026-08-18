@@ -7,7 +7,10 @@ use std::path::Path;
 use crate::analytics_types::{Catalog, EnrichmentSnapshot, RunSummary, SpawnSummary};
 use crate::spawn_parse::SpawnDraft;
 use crate::timing::{AnalyticsReport, RunSettings};
-use crate::types::{OverlaySettings, ToolsSettings};
+use crate::types::{
+    OverlaySettings, RecordSessionTrackingInput, SessionTrackingEvent, SessionTrackingEventKind,
+    SessionTrackingSiteKind, ToolsSettings,
+};
 
 #[derive(Clone)]
 pub struct Db {
@@ -87,7 +90,8 @@ impl Db {
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 character TEXT,
                 chatlogs_dir TEXT,
-                always_on_top INTEGER NOT NULL DEFAULT 0
+                always_on_top INTEGER NOT NULL DEFAULT 0,
+                tracking_pip_enabled INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS ran_marks (
                 site_id TEXT PRIMARY KEY,
@@ -122,6 +126,19 @@ impl Db {
                 liquid_isk INTEGER NOT NULL,
                 FOREIGN KEY (constellation) REFERENCES spawns(constellation)
             );
+            CREATE TABLE IF NOT EXISTS wallet_imported_payouts (
+                import_key TEXT PRIMARY KEY,
+                imported_at TEXT NOT NULL,
+                run_id TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS session_tracking_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fleet_log_id TEXT NOT NULL,
+                event_kind TEXT NOT NULL,
+                site_kind TEXT,
+                overlay_site_id TEXT,
+                occurred_at TEXT NOT NULL
+            );
             "#,
         )
         .execute(&self.pool)
@@ -139,6 +156,8 @@ impl Db {
         self.ensure_column("settings", "ammo_launchers", "INTEGER NOT NULL DEFAULT 6")
             .await?;
         self.ensure_column("settings", "ammo_per_launcher", "INTEGER NOT NULL DEFAULT 26")
+            .await?;
+        self.ensure_column("settings", "tracking_pip_enabled", "INTEGER NOT NULL DEFAULT 1")
             .await?;
         self.ensure_column("analytics_runs", "enrichment_json", "TEXT").await?;
 
@@ -254,6 +273,85 @@ impl Db {
         Ok(())
     }
 
+    pub async fn load_imported_wallet_keys(
+        &self,
+        keys: &[String],
+    ) -> Result<HashSet<String>, sqlx::Error> {
+        let mut out = HashSet::new();
+        for key in keys {
+            let row: Option<(String,)> = sqlx::query_as(
+                "SELECT import_key FROM wallet_imported_payouts WHERE import_key = ?",
+            )
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+            if let Some((found,)) = row {
+                out.insert(found);
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn record_session_tracking_event(
+        &self,
+        fleet_log_id: &str,
+        input: &RecordSessionTrackingInput,
+        at: DateTime<Utc>,
+    ) -> Result<SessionTrackingEvent, sqlx::Error> {
+        let event_kind = match input.event_kind {
+            SessionTrackingEventKind::FleetWarp => "fleet_warp",
+            SessionTrackingEventKind::BreakStart => "break_start",
+        };
+        let site_kind = input.site_kind.map(|kind| match kind {
+            SessionTrackingSiteKind::OtaHacking => "ota_hacking",
+            SessionTrackingSiteKind::Nco => "nco",
+            SessionTrackingSiteKind::NmcMining => "nmc_mining",
+        });
+        let occurred_at = at.to_rfc3339();
+        let result = sqlx::query(
+            "INSERT INTO session_tracking_events (fleet_log_id, event_kind, site_kind, overlay_site_id, occurred_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(fleet_log_id)
+        .bind(event_kind)
+        .bind(site_kind)
+        .bind(&input.overlay_site_id)
+        .bind(&occurred_at)
+        .execute(&self.pool)
+        .await?;
+        let id = result.last_insert_rowid();
+        Ok(SessionTrackingEvent {
+            id,
+            fleet_log_id: fleet_log_id.to_string(),
+            event_kind: input.event_kind,
+            site_kind: input.site_kind,
+            overlay_site_id: input.overlay_site_id.clone(),
+            occurred_at: at,
+        })
+    }
+
+    pub async fn record_imported_wallet_keys(
+        &self,
+        run_id: &str,
+        keys: &[String],
+    ) -> Result<(), sqlx::Error> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let now = Utc::now().to_rfc3339();
+        for key in keys {
+            sqlx::query(
+                "INSERT OR IGNORE INTO wallet_imported_payouts (import_key, imported_at, run_id) VALUES (?, ?, ?)",
+            )
+            .bind(key)
+            .bind(&now)
+            .bind(run_id)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
     pub async fn load_catalog(&self) -> Result<Catalog, sqlx::Error> {
         let spawn_rows: Vec<(String, Option<String>, Option<String>, Option<String>)> =
             sqlx::query_as(
@@ -332,8 +430,8 @@ impl Db {
     }
 
     pub async fn get_overlay_settings(&self) -> Result<OverlaySettings, sqlx::Error> {
-        let row: (Option<String>, Option<String>, i64) = sqlx::query_as(
-            "SELECT character, chatlogs_dir, always_on_top FROM settings WHERE id = 1",
+        let row: (Option<String>, Option<String>, i64, i64) = sqlx::query_as(
+            "SELECT character, chatlogs_dir, always_on_top, tracking_pip_enabled FROM settings WHERE id = 1",
         )
         .fetch_one(&self.pool)
         .await?;
@@ -341,16 +439,18 @@ impl Db {
             character: row.0,
             chatlogs_dir: row.1,
             always_on_top: row.2 != 0,
+            tracking_pip_enabled: row.3 != 0,
         })
     }
 
     pub async fn set_overlay_settings(&self, settings: &OverlaySettings) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE settings SET character = ?, chatlogs_dir = ?, always_on_top = ? WHERE id = 1",
+            "UPDATE settings SET character = ?, chatlogs_dir = ?, always_on_top = ?, tracking_pip_enabled = ? WHERE id = 1",
         )
         .bind(&settings.character)
         .bind(&settings.chatlogs_dir)
         .bind(if settings.always_on_top { 1 } else { 0 })
+        .bind(if settings.tracking_pip_enabled { 1 } else { 0 })
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -606,10 +706,12 @@ mod tests {
         s.character = Some("Estemaire".into());
         s.chatlogs_dir = Some("C:/logs".into());
         s.always_on_top = true;
+        s.tracking_pip_enabled = false;
         db.set_overlay_settings(&s).await.unwrap();
         let loaded = db.get_overlay_settings().await.unwrap();
         assert_eq!(loaded.character.as_deref(), Some("Estemaire"));
         assert!(loaded.always_on_top);
+        assert!(!loaded.tracking_pip_enabled);
 
         let now = Utc::now();
         db.mark_ran("abc123", now).await.unwrap();
@@ -619,6 +721,38 @@ mod tests {
         db.clear_site("abc123", now).await.unwrap();
         let cleared = db.load_cleared_ids().await.unwrap();
         assert!(cleared.contains("abc123"));
+    }
+
+    #[tokio::test]
+    async fn migrate_adds_tracking_pip_enabled_for_legacy_settings_table() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        let legacy_opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
+        let legacy_pool = sqlx::SqlitePool::connect_with(legacy_opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                character TEXT,
+                chatlogs_dir TEXT,
+                always_on_top INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&legacy_pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO settings (id, character, chatlogs_dir, always_on_top) VALUES (1, NULL, NULL, 0)",
+        )
+        .execute(&legacy_pool)
+        .await
+        .unwrap();
+        legacy_pool.close().await;
+
+        let db = Db::open(&db_path).await.unwrap();
+        let settings = db.get_overlay_settings().await.unwrap();
+        assert!(settings.tracking_pip_enabled);
     }
 
     #[tokio::test]
@@ -647,6 +781,7 @@ mod tests {
         let overlay = db.get_overlay_settings().await.unwrap();
         assert!(overlay.character.is_none());
         assert!(!overlay.always_on_top);
+        assert!(overlay.tracking_pip_enabled);
     }
 
     #[tokio::test]
@@ -863,5 +998,47 @@ mod tests {
         let cat = db.load_catalog().await.unwrap();
         assert!(cat.runs.is_empty());
         assert!(cat.spawns.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_tracking_events_round_trip() {
+        use crate::types::{
+            RecordSessionTrackingInput, SessionTrackingEventKind, SessionTrackingSiteKind,
+        };
+
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let at = Utc::now();
+
+        let break_event = db
+            .record_session_tracking_event(
+                "Fleet_test_1.txt",
+                &RecordSessionTrackingInput {
+                    event_kind: SessionTrackingEventKind::BreakStart,
+                    site_kind: None,
+                    overlay_site_id: None,
+                },
+                at,
+            )
+            .await
+            .unwrap();
+        assert_eq!(break_event.event_kind, SessionTrackingEventKind::BreakStart);
+        assert!(break_event.site_kind.is_none());
+
+        let warp_event = db
+            .record_session_tracking_event(
+                "Fleet_test_1.txt",
+                &RecordSessionTrackingInput {
+                    event_kind: SessionTrackingEventKind::FleetWarp,
+                    site_kind: Some(SessionTrackingSiteKind::Nco),
+                    overlay_site_id: Some("site-123".into()),
+                },
+                at,
+            )
+            .await
+            .unwrap();
+        assert_eq!(warp_event.event_kind, SessionTrackingEventKind::FleetWarp);
+        assert_eq!(warp_event.site_kind, Some(SessionTrackingSiteKind::Nco));
+        assert_eq!(warp_event.overlay_site_id.as_deref(), Some("site-123"));
     }
 }

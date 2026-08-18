@@ -7,6 +7,7 @@ mod enrichment;
 mod enrichment_pipeline;
 mod gamelog_parse;
 mod gamelog_scan;
+mod gamelog_watch;
 mod parse;
 mod resolve;
 mod run_desk;
