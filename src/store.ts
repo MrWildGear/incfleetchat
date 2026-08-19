@@ -62,8 +62,40 @@ export const useAppStore = create<Store>((set, get) => ({
     const board = await invoke<Board>("mark_ran", { siteId });
     set({ board });
   },
-  recordSessionTracking: async (input) =>
-    invoke<SessionTrackingEvent>("record_session_tracking_event", { input }),
+  recordSessionTracking: async (input) => {
+    const board = get().board;
+    const postedAtDate = new Date(input.posted_at);
+    const expiresAtDate = new Date(input.expires_at);
+
+    // 1. Duplication Check (High Priority): Prevent creating duplicate records based on date/time.
+    const isDuplicate = board.some((site) => {
+      if (!site || !site.posted_at || !site.expires_at) return false;
+      try {
+        const existingPostedAt = new Date(site.posted_at);
+        const existingExpiresAt = new Date(site.expires_at);
+
+        // Use date-only comparison (ignoring time component differences)
+        return existingPostedAt.getFullYear() === postedAtDate.getFullYear() &&
+               existingPostedAt.getMonth() === postedAtDate.getMonth() &&
+               existingPostedAt.getDay() === postedAtDate.getDay() &&
+               existingExpiresAt.getFullYear() === expiresAtDate.getFullYear() &&
+               existingExpiresAt.getMonth() === expiresAtDate.getMonth() &&
+               existingExpiresAt.getDay() === expiresAtDate.getDay();
+      } catch (e) {
+        console.error("Error comparing dates during duplicate check:", e);
+        return false;
+      }
+    });
+
+    if (isDuplicate) {
+      throw new Error("Duplicate site record detected: Site already tracked with this posted and expires date.");
+    }
+
+    // Proceed with the original logic if no duplication is found.
+    const event = await invoke<SessionTrackingEvent>("record_session_tracking_event", { input });
+    set({ board: { ...board, ...event.newSite } }); // Assuming the event payload contains new site data for merging/updating
+    return event;
+  },
   clearSite: async (siteId) => {
     const board = await invoke<Board>("clear_site", { siteId });
     set({ board });

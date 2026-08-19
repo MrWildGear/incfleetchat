@@ -9,6 +9,13 @@ export type SiteRow = {
   ran: boolean;
   phase: SitePhase;
   clearable: boolean;
+
+  // Metrics added to support the Drill Down View (Task 2)
+  duration_minutes: number | null;
+  approach_type: "automatic" | "manual" | null; // Assuming an enum/string for 'Approach'
+  combat_payout: number | null; // For Combat->Payout
+  hit_percent: number | null;   // For Hit %
+  miss_percent: number | null;  // For Miss %
 };
 
 export type BoardStatus =
