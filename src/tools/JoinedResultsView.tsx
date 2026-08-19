@@ -553,17 +553,14 @@ export function JoinedResultsView({
         <table className="w-full text-left text-xs">
           <thead className="sticky top-0 z-10 bg-surface text-muted">
             <tr>
-              {(
-                [
-                  ["time", "Time"],
-                  ["duration", "Duration"],
-                  ["break", "Break?"],
-                  ["approach", "Approach"],
-                  ["combat", "Combat→payout"],
-                  ["hitPct", "Hit %"],
-                  ["missPct", "Miss %"],
-                ] as const
-              ).map(([key, label]) => {
+              {[
+                ["time", "Time"],
+                ["duration", "Duration"],
+                ["approach", "Approach"],
+                ["combat", "Combat→payout"],
+                ["hitPct", "Hit %"],
+                ["missPct", "Miss %"],
+              ].map(([key, label]) => {
                 const active = siteSort.key === key;
                 const marker = !active
                   ? ""
@@ -625,12 +622,6 @@ export function JoinedResultsView({
                     {formatDuration(s.duration_seconds)}
                   </td>
                   <td className="px-2 py-1">
-                    {s.is_break ? "yes" : ""}
-                  </td>
-                  <td className="px-2 py-1">
-                    {e ? formatSiteKind(e.site_kind) : "—"}
-                  </td>
-                  <td className="px-2 py-1">
                     {e ? formatDuration(e.approach_seconds) : "—"}
                   </td>
                   <td className="px-2 py-1">
@@ -643,6 +634,9 @@ export function JoinedResultsView({
                   </td>
                   <td className="px-2 py-1">
                     {formatPercent(missPct)}
+                  </td>
+                  <td className="px-2 py-1">
+                    {e ? formatSiteKind(e.site_kind) : "—"}
                   </td>
                 </tr>
               );
