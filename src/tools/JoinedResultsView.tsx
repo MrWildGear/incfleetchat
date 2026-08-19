@@ -576,11 +576,10 @@ export function JoinedResultsView({
                         setSiteSort((prev) =>
                           prev.key === key
                             ? {
-                                key,
-                                dir:
-                                  prev.dir === "asc" ? "desc" : "asc",
+                                key: key as SiteSortKey,
+                                dir: prev.dir === "asc" ? "desc" : "asc",
                               }
-                            : { key, dir: "asc" },
+                            : { key: key as SiteSortKey, dir: "asc" }
                         )
                       }
                     >

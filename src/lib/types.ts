@@ -52,6 +52,8 @@ export type SessionTrackingEvent = {
 };
 
 export type RecordSessionTrackingInput = {
+  posted_at: string;
+  expires_at: string;
   event_kind: SessionTrackingEventKind;
   site_kind?: SessionTrackingSiteKind | null;
   overlay_site_id?: string | null;

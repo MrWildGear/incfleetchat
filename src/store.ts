@@ -68,7 +68,7 @@ export const useAppStore = create<Store>((set, get) => ({
     const expiresAtDate = new Date(input.expires_at);
 
     // 1. Duplication Check (High Priority): Prevent creating duplicate records based on date/time.
-    const isDuplicate = board.some((site) => {
+    const isDuplicate = board.sites.some((site) => {
       if (!site || !site.posted_at || !site.expires_at) return false;
       try {
         const existingPostedAt = new Date(site.posted_at);
@@ -93,7 +93,7 @@ export const useAppStore = create<Store>((set, get) => ({
 
     // Proceed with the original logic if no duplication is found.
     const event = await invoke<SessionTrackingEvent>("record_session_tracking_event", { input });
-    set({ board: { ...board, ...event.newSite } }); // Assuming the event payload contains new site data for merging/updating
+    set({ board: { ...board, sites: [/* Placeholder for new site data */] } }); // TODO: Adjust merge logic based on actual event return type
     return event;
   },
   clearSite: async (siteId) => {
