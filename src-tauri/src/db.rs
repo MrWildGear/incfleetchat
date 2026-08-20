@@ -402,6 +402,7 @@ impl Db {
     /// Test/ops helper: all currently-recorded (import_key, run_id) pairs.
     /// Lets callers assert which wallet-journal keys are still held by the dedup
     /// ledger after a delete, so we can verify orphaned keys were cleaned up.
+    #[cfg(test)]
     pub async fn all_imported_wallet_keys(&self) -> Result<Vec<(String, String)>, sqlx::Error> {
         sqlx::query_as("SELECT import_key, run_id FROM wallet_imported_payouts")
             .fetch_all(&self.pool)
