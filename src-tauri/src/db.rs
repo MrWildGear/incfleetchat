@@ -151,16 +151,28 @@ impl Db {
         .await?;
 
         // Recreate-safe additive migrations for older DBs created before these columns existed.
-        self.ensure_column("settings", "gamelogs_dir", "TEXT").await?;
-        self.ensure_column("settings", "fc_character", "TEXT").await?;
+        self.ensure_column("settings", "gamelogs_dir", "TEXT")
+            .await?;
+        self.ensure_column("settings", "fc_character", "TEXT")
+            .await?;
         self.ensure_column("settings", "ammo_launchers", "INTEGER NOT NULL DEFAULT 6")
             .await?;
-        self.ensure_column("settings", "ammo_per_launcher", "INTEGER NOT NULL DEFAULT 26")
+        self.ensure_column(
+            "settings",
+            "ammo_per_launcher",
+            "INTEGER NOT NULL DEFAULT 26",
+        )
+        .await?;
+        self.ensure_column(
+            "settings",
+            "tracking_pip_enabled",
+            "INTEGER NOT NULL DEFAULT 1",
+        )
+        .await?;
+        self.ensure_column("analytics_runs", "enrichment_json", "TEXT")
             .await?;
-        self.ensure_column("settings", "tracking_pip_enabled", "INTEGER NOT NULL DEFAULT 1")
+        self.ensure_column("analytics_runs", "fleet_log_id", "TEXT")
             .await?;
-        self.ensure_column("analytics_runs", "enrichment_json", "TEXT").await?;
-        self.ensure_column("analytics_runs", "fleet_log_id", "TEXT").await?;
 
         Ok(())
     }
@@ -195,12 +207,13 @@ impl Db {
         let sov_holder = draft.and_then(|d| d.sov_holder.clone());
         let staging_system = draft.and_then(|d| d.staging_system.clone());
         let hq_system = draft.and_then(|d| d.hq_system.clone());
-        let assault = serde_json::to_string(
-            &draft.map(|d| d.assault_systems.clone()).unwrap_or_default(),
-        )
-        .unwrap_or_else(|_| "[]".into());
+        let assault =
+            serde_json::to_string(&draft.map(|d| d.assault_systems.clone()).unwrap_or_default())
+                .unwrap_or_else(|_| "[]".into());
         let vanguard = serde_json::to_string(
-            &draft.map(|d| d.vanguard_systems.clone()).unwrap_or_default(),
+            &draft
+                .map(|d| d.vanguard_systems.clone())
+                .unwrap_or_default(),
         )
         .unwrap_or_else(|_| "[]".into());
         let announced_at = draft.and_then(|d| d.announced_at.map(|t| t.to_rfc3339()));
@@ -386,6 +399,15 @@ impl Db {
         Ok(())
     }
 
+    /// Test/ops helper: all currently-recorded (import_key, run_id) pairs.
+    /// Lets callers assert which wallet-journal keys are still held by the dedup
+    /// ledger after a delete, so we can verify orphaned keys were cleaned up.
+    pub async fn all_imported_wallet_keys(&self) -> Result<Vec<(String, String)>, sqlx::Error> {
+        sqlx::query_as("SELECT import_key, run_id FROM wallet_imported_payouts")
+            .fetch_all(&self.pool)
+            .await
+    }
+
     pub async fn load_catalog(&self) -> Result<Catalog, sqlx::Error> {
         let spawn_rows: Vec<(String, Option<String>, Option<String>, Option<String>)> =
             sqlx::query_as(
@@ -477,7 +499,10 @@ impl Db {
         })
     }
 
-    pub async fn set_overlay_settings(&self, settings: &OverlaySettings) -> Result<(), sqlx::Error> {
+    pub async fn set_overlay_settings(
+        &self,
+        settings: &OverlaySettings,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE settings SET character = ?, chatlogs_dir = ?, always_on_top = ?, tracking_pip_enabled = ? WHERE id = 1",
         )
@@ -592,11 +617,13 @@ impl Db {
         .bind(run_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.and_then(|(settings_json, report_json, wallet_text, fleet_log_id)| {
-            let settings: RunSettings = serde_json::from_str(&settings_json).ok()?;
-            let report: AnalyticsReport = serde_json::from_str(&report_json).ok()?;
-            Some((settings, report, wallet_text, fleet_log_id))
-        }))
+        Ok(
+            row.and_then(|(settings_json, report_json, wallet_text, fleet_log_id)| {
+                let settings: RunSettings = serde_json::from_str(&settings_json).ok()?;
+                let report: AnalyticsReport = serde_json::from_str(&report_json).ok()?;
+                Some((settings, report, wallet_text, fleet_log_id))
+            }),
+        )
     }
 
     pub async fn load_ran_ids(&self) -> Result<HashSet<String>, sqlx::Error> {
@@ -607,13 +634,11 @@ impl Db {
     }
 
     pub async fn mark_ran(&self, site_id: &str, at: DateTime<Utc>) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT OR REPLACE INTO ran_marks (site_id, marked_at) VALUES (?, ?)",
-        )
-        .bind(site_id)
-        .bind(at.to_rfc3339())
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT OR REPLACE INTO ran_marks (site_id, marked_at) VALUES (?, ?)")
+            .bind(site_id)
+            .bind(at.to_rfc3339())
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -625,17 +650,19 @@ impl Db {
     }
 
     pub async fn clear_site(&self, site_id: &str, at: DateTime<Utc>) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT OR REPLACE INTO cleared_marks (site_id, cleared_at) VALUES (?, ?)",
-        )
-        .bind(site_id)
-        .bind(at.to_rfc3339())
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT OR REPLACE INTO cleared_marks (site_id, cleared_at) VALUES (?, ?)")
+            .bind(site_id)
+            .bind(at.to_rfc3339())
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    pub async fn clear_sites(&self, site_ids: &[String], at: DateTime<Utc>) -> Result<(), sqlx::Error> {
+    pub async fn clear_sites(
+        &self,
+        site_ids: &[String],
+        at: DateTime<Utc>,
+    ) -> Result<(), sqlx::Error> {
         for id in site_ids {
             self.clear_site(id, at).await?;
         }
@@ -655,6 +682,14 @@ impl Db {
             .ok_or_else(|| format!("Run {run_id} not found"))?;
 
         sqlx::query("DELETE FROM analytics_runs WHERE run_id = ?")
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        // Drop this run's wallet-journal keys from the dedup ledger so they can be
+        // re-imported and relinked to a new/restored manifest on a later paste.
+        sqlx::query("DELETE FROM wallet_imported_payouts WHERE run_id = ?")
             .bind(run_id)
             .execute(&mut *tx)
             .await
@@ -697,6 +732,17 @@ impl Db {
             return Err(format!("Spawn {constellation} not found"));
         }
 
+        // Drop this spawn's wallet-journal keys from the dedup ledger before the
+        // analytics_runs rows go, so a subquery against runs still sees them. This
+        // lets orphaned keys be re-imported and relinked to a new/restored manifest.
+        sqlx::query(
+            "DELETE FROM wallet_imported_payouts \
+             WHERE run_id IN (SELECT run_id FROM analytics_runs WHERE constellation = ?)",
+        )
+        .bind(constellation)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM analytics_runs WHERE constellation = ?")
             .bind(constellation)
             .execute(&mut *tx)
@@ -714,6 +760,12 @@ impl Db {
 
     pub async fn clear_all_analytics(&self) -> Result<(), String> {
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        // Drop every recorded wallet-journal key so nothing stays orphaned behind a
+        // cleared scope; keys can be re-imported and relinked on the next paste.
+        sqlx::query("DELETE FROM wallet_imported_payouts")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
         sqlx::query("DELETE FROM analytics_runs")
             .execute(&mut *tx)
             .await
@@ -832,9 +884,11 @@ mod tests {
         let settings = RunSettings::default();
         let report = build_report(&[], &settings);
         db.upsert_spawn("4MY-AB", None).await.unwrap();
-        db.save_run("run-1", "4MY-AB", &settings, "wallet", "manifest", &report, None)
-            .await
-            .unwrap();
+        db.save_run(
+            "run-1", "4MY-AB", &settings, "wallet", "manifest", &report, None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             db.load_enrichment_status("run-1").await.unwrap(),
@@ -894,12 +948,28 @@ mod tests {
         let settings = RunSettings::default();
         let report = build_report(&[], &settings);
         db.upsert_spawn("4MY-AB", None).await.unwrap();
-        db.save_run("run-missing", "4MY-AB", &settings, "wallet", "manifest", &report, None)
-            .await
-            .unwrap();
-        db.save_run("run-stale", "4MY-AB", &settings, "wallet", "manifest", &report, None)
-            .await
-            .unwrap();
+        db.save_run(
+            "run-missing",
+            "4MY-AB",
+            &settings,
+            "wallet",
+            "manifest",
+            &report,
+            None,
+        )
+        .await
+        .unwrap();
+        db.save_run(
+            "run-stale",
+            "4MY-AB",
+            &settings,
+            "wallet",
+            "manifest",
+            &report,
+            None,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             db.load_enrichment_status("run-missing").await.unwrap(),
@@ -923,7 +993,10 @@ mod tests {
         );
 
         let ids = db.list_run_ids_for_spawn("4MY-AB").await.unwrap();
-        assert_eq!(ids, vec!["run-missing".to_string(), "run-stale".to_string()]);
+        assert_eq!(
+            ids,
+            vec!["run-missing".to_string(), "run-stale".to_string()]
+        );
         let all_ids = db.list_all_run_ids().await.unwrap();
         assert_eq!(all_ids, ids);
     }
@@ -1020,6 +1093,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_run_removes_imported_keys_for_that_run() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let settings = RunSettings::default();
+        let report = build_report(&[], &settings);
+        db.upsert_spawn("4MY-AB", None).await.unwrap();
+        db.save_run("r1", "4MY-AB", &settings, "", "", &report, None)
+            .await
+            .unwrap();
+        db.record_imported_wallet_keys("r1", &["k1".into(), "k2".into()])
+            .await
+            .unwrap();
+
+        db.delete_run("r1").await.unwrap();
+
+        let remaining = db.all_imported_wallet_keys().await.unwrap();
+        assert!(remaining.iter().all(|(_, rid)| rid != "r1"));
+    }
+
+    #[tokio::test]
+    async fn delete_spawn_removes_only_owned_imported_keys() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let settings = RunSettings::default();
+        let report = build_report(&[], &settings);
+        db.upsert_spawn("4MY-AB", None).await.unwrap();
+        db.upsert_spawn("OTHER", None).await.unwrap();
+        db.save_run("r1", "4MY-AB", &settings, "", "", &report, None)
+            .await
+            .unwrap();
+        db.save_run("r2", "OTHER", &settings, "", "", &report, None)
+            .await
+            .unwrap();
+        db.record_imported_wallet_keys("r1", &["k-a".into()])
+            .await
+            .unwrap();
+        db.record_imported_wallet_keys("r2", &["k-c".into()])
+            .await
+            .unwrap();
+
+        db.delete_spawn("4MY-AB").await.unwrap();
+
+        let remaining = db.all_imported_wallet_keys().await.unwrap();
+        assert!(remaining.iter().all(|(_, rid)| rid != "r1"));
+        assert!(remaining.iter().any(|(k, rid)| k == "k-c" && rid == "r2"));
+    }
+
+    #[tokio::test]
+    async fn clear_all_analytics_removes_all_imported_keys() {
+        let dir = tempdir().unwrap();
+        let db = Db::open(&dir.path().join("app.db")).await.unwrap();
+        let settings = RunSettings::default();
+        let report = build_report(&[], &settings);
+        db.upsert_spawn("4MY-AB", None).await.unwrap();
+        db.save_run("r1", "4MY-AB", &settings, "", "", &report, None)
+            .await
+            .unwrap();
+        db.record_imported_wallet_keys("r1", &["k1".into()])
+            .await
+            .unwrap();
+
+        db.clear_all_analytics().await.unwrap();
+
+        assert!(db.all_imported_wallet_keys().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn clear_all_analytics_empties_both_tables() {
         let dir = tempdir().unwrap();
         let db = Db::open(&dir.path().join("app.db")).await.unwrap();
@@ -1078,4 +1218,3 @@ mod tests {
         assert_eq!(warp_event.overlay_site_id.as_deref(), Some("site-123"));
     }
 }
-

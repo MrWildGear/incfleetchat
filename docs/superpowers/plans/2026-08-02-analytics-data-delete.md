@@ -10,6 +10,18 @@
 
 **Spec:** [docs/superpowers/specs/2026-08-02-analytics-data-delete-design.md](../specs/2026-08-02-analytics-data-delete-design.md)
 
+### Implementation log (wallet-ledger cleanup on scope delete)
+
+**2026-08-19 — Implemented & verified green.** Wallet-journal keys in `wallet_imported_payouts` were orphaned whenever a scope was deleted, so duplicate-detection kept skipping them on future imports. Fix is fully contained in `db.rs`; `run_desk.rs` unchanged.
+
+- Added reader `all_imported_wallet_keys()` (right after `record_imported_wallet_keys`) to assert ledger contents from tests — no raw SQL inserts needed; seeds via existing `record_imported_wallet_keys(run_id, &keys)`.
+- TDD order: wrote the 3 tests first (`delete_run_removes_imported_keys_for_that_run`, `delete_spawn_removes_only_owned_imported_keys`, `clear_all_analytics_removes_all_imported_keys`), confirmed red on unpatched code, then implemented.
+- `delete_run`: add `DELETE FROM wallet_imported_payouts WHERE run_id = ?` after the analytics_runs delete.
+- `delete_spawn`: Option A subquery — `DELETE ... WHERE run_id IN (SELECT run_id FROM analytics_runs WHERE constellation = ?)` placed **before** the analytics_runs delete, so the subquery still sees the rows. Then runs + spawn as before.
+- `clear_all_analytics`: add `DELETE FROM wallet_imported_payouts` alongside the existing two deletes.
+- Full lib suite green (107 passed). The one failure — `resolve::tests::live_hamilton_log_parses_two_ones_when_present` — is pre-existing and unrelated: it reads a live EVE chat log from `Documents/EVE/logs/`, which fails identically on the clean tree.
+- No commit/PR made (per repo working rules).
+
 ## Global Constraints
 
 - Delete acts on **current Scope** only (Overall = clear all)

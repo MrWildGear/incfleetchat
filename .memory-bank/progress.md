@@ -39,6 +39,22 @@ Append-only log of meaningful completed work.
 - Confirmed optional private-session gitignore is already applied in `.gitignore`.
 - Attempted Memory Bank CLI/hook install path; blocked in current shell because `python`/`python3` and `bash` are unavailable.
 
+---
+## 2026-08-19
+
+### Wallet-ledger cleanup on scope delete (INC Manifest)
+
+- Fixed orphaned `wallet_imported_payouts` keys: deleting a Spawn/Overall scope left dedup keys behind, so duplicate-detection kept skipping them on future imports.
+- Self-contained fix in `src-tauri/src/db.rs`; `run_desk.rs` unchanged (wrappers already call the three db methods).
+- Added reader `all_imported_wallet_keys()` right after `record_imported_wallet_keys` — lets tests assert ledger contents without raw SQL inserts; seeds via existing `record_imported_wallet_keys(run_id, &keys)`.
+- TDD order: wrote 3 tests first (confirmed red), then implemented:
+  - `delete_run`: add `DELETE FROM wallet_imported_payouts WHERE run_id = ?` after the analytics_runs delete.
+  - `delete_spawn`: Option A subquery (`WHERE run_id IN (SELECT run_id FROM analytics_runs WHERE constellation = ?)`) placed **before** the runs delete so the subquery still sees them; then runs + spawn as before.
+  - `clear_all_analytics`: add `DELETE FROM wallet_imported_payouts` alongside existing deletes.
+- Full lib suite green (107 passed). One pre-existing unrelated failure: `resolve::tests::live_hamilton_log_parses_two_ones_when_present` reads a live EVE chat log from `Documents/EVE/logs/`, fails identically on clean tree — not touched by this change.
+- No commit/PR made (repo working rules).
+- Updated plan log in `docs/superpowers/plans/2026-08-02-analytics-data-delete.md`.
+
 ### Tooling installed (Cursor)
 
 - Installed Python 3.12 and jq on Windows.
